@@ -1,55 +1,236 @@
-# ArmorControl
+# Armor Control
 
-ArmorControl 是运行在 KSP 1.12.5 游戏进程内的局域网飞行控制网页。DLL 自带 HTTP/WebSocket 服务；手机、平板或电脑直接访问游戏主机，无需另行启动 kRPC 或 Web 服务。
+A touch-friendly remote flight console for Kerbal Space Program.
 
-## 依赖与安装
+KSP 1.12.5 · Version 0.1 · Early beta · CC BY-NC-SA
 
-- KSP 1.12.5，.NET 4.x Runtime。
-- MechJeb2。原生载具控制不依赖它，但 Flight Pannel、Flight Recorder、节点规划和自动驾驶页面需要当前安装中的 MechJeb2。
-- 保持目录结构：`GameData/ArmorControl/Plugins/ArmorControl.dll` 与 `GameData/ArmorControl/`。
+English | [简体中文](README.zh-CN.md)
 
-ArmorControl 现使用独立目录，不需要放在 ArmorOverhaul 中。升级时不要同时保留旧位置的
-`ArmorControl.dll`，否则 KSP 可能重复加载。网页、Localization 和 settings.cfg 均随本目录保存。
-开发源码位于 `Source/ArmorControl`；专用构建与测试脚本仍在 KSP 根目录的 `BuildTools`。
-编译中间文件和审核 DLL 保存在 GameData 以外，不随安装包发布。
+[Downloads](https://github.com/Armo00/ArmorControl/releases) · [KSP Forum](https://forum.kerbalspaceprogram.com/topic/231740-1125-armor-control-v01/) · [Report a bug](https://github.com/Armo00/ArmorControl/issues)
 
-## 首次使用
+![Armor Control overview](Screenshot/Mainpage.jpg)
 
-1. 启动 KSP，点击游戏右侧工具栏中的 ArmorControl 图标。
-2. 在面板中确认或修改端口，点击 `Start Server`。图标变为绿色后服务已经运行。
-3. 在游戏主机防火墙中只对可信的专用网络放行所配置 TCP 端口（默认 8765）。
-4. 其他设备直接打开 `http://<游戏主机局域网IP>:8765/`。
+## What is Armor Control?
 
-当前默认关闭访问令牌，只适用于可信局域网。如以后配置了 `accessToken`，新设备首次访问使用 `http://<游戏主机局域网IP>:8765/#token=<accessToken>`。当前传输是局域网明文 HTTP/WebSocket，不应直接暴露到公网。
+Armor Control turns your phone, tablet, or another computer into a remote flight console for KSP. Monitor your vessel, operate its systems, plan maneuvers, and access supported autopilot functions through a web interface designed for touch and desktop use.
 
-## 配置
+The HTTP/WebSocket server runs inside KSP. No separate server application, kRPC installation, or special Armor Control part is required. English and Simplified Chinese are available; Chinese is selected by default.
 
-- `enabled`：总开关。
-- `autoStartServer`：是否在 DLL 加载后自动启动；默认 `True`。仍可通过游戏内面板停止或重新启动服务。
-- `bindAddress`：监听地址；`0.0.0.0` 允许其他设备访问，`127.0.0.1` 仅限本机。
-- `port`：1024–65535。
-- `fastTelemetryHz`：1–60 Hz，默认 30 Hz。
-- `regularTelemetryHz`：1–20 Hz，默认 5 Hz。
-- `accessToken`：共享访问令牌；当前默认为空，即关闭鉴权。
+## Sounds familiar?
 
-## 控制安全
+Yes! Armor Control was inspired by [Telemachus](https://github.com/TeaGuild/Telemachus-1) and the idea of bringing KSP mission control into a browser.
 
-- 多设备的离散控制进入同一个全局 FIFO，没有用户角色或控制权租约。
-- 相同 `commandId` 幂等处理，网络重试不会重复执行分级等操作。
-- 分级、加载 quicksave 和 EVA 需要单击后将确认滑块拖到最右端。
-- 连续控制每 100 ms 续期，350 ms 超时；断线、切换载具、页面隐藏或主动解除都会归零。
-- 页面只在收到成功回执或后续权威状态时确认开关状态。
+My goal is to develop that idea into a higher-performance, more versatile remote control and monitoring interface, combining live telemetry, vessel interaction, and mod integrations in one place. Performance is a development goal, not a claim of benchmarked superiority over Telemachus.
 
-## 诊断
+I also wanted to move frequently used controls onto another device, leaving the main KSP screen clear for the flight itself. Thank you to the Telemachus project for the inspiration.
 
-- `http://<主机>:8765/health` 返回客户端数量以及快慢采样、序列化平均/峰值耗时。
-- 若页面显示演示模式，检查 KSP 日志中的 `[ArmorControl]`、端口占用、防火墙和 URL 中的令牌。
-- 若端口被占用，面板会显示启动失败并每 5 秒重试；点击 `Cancel Start` 可取消。
-- 若只有 MechJeb 功能不可用，确认活动载具有可用 MechJeb 核心并已设置所需目标。
-- Porkchop 解算是异步的；切换目标或重新解算会取消旧任务，矩阵只在新 revision 完成后获取一次。
+## Attention needed
 
-## 构建与发布
+**Early beta:** Version 0.1 is experimental. Expect bugs, incomplete behavior, and compatibility issues. Back up your saves before testing.
 
-- `BuildTools/ArmorControl.VerifyRelease.ps1`：编译 Release DLL，运行多客户端/协议回归、前端语法检查，并核对必要页面、控制命令、动作组数量和“禁止模拟遥测”安全约束。
-- `BuildTools/ArmorControl.PackageRelease.ps1`：先执行完整验收，再生成保留 `GameData/ArmorControl/...` 安装路径的 ZIP。
-- 当前安装包位于 `BuildTools/Releases/ArmorControl-0.1.0.zip`；解压到 KSP 根目录即可。
+### Dependencies
+
+| Component | Requirement in 0.1 | Compatibility notes |
+| --- | --- | --- |
+| KSP | Required | Developed and tested with 1.12.5. |
+| MechJeb | Required | Use **2.14.3**. Flight data, recording, planning, and automation integrate with MJ. |
+| VesselView / Vessel Viewer | Required | The vessel renderer targets **0.8.9.0**. |
+| Trajectories | Optional | Required for trajectory prediction; adapted to the local **2.4.5.4** assembly. |
+
+MechJeb and VesselView are direct assembly dependencies in this release. Do not assume Armor Control will start normally without them, even if you only want basic controls. MJ functions also require an available MechJeb core on the active vessel.
+
+I have encountered too many problems with MechJeb 2.15.x in my setup, so support is intentionally pinned to 2.14.3. Other MJ versions are unsupported. Other VesselView and Trajectories versions are not guaranteed to work. Dependencies are not bundled.
+
+**Security:** Authentication is disabled by default, and traffic uses unencrypted HTTP/WebSocket. Use only on a trusted local network. Do not expose the server to the internet or forward its port through your router. An optional access token does not encrypt the connection.
+
+**Multiple devices:** Devices share control of the same active vessel. Commands are processed in arrival order; there are no user roles or exclusive control ownership. Coordinate before operating. Staging, EVA, and quickloading affect the actual game.
+
+**AI disclosure:** This mod was developed with AI assistance. If you do not want to use AI-assisted software, please do not use it.
+
+## Installation and connection
+
+Distribution is currently through [GitHub](https://github.com/Armo00/ArmorControl). SpaceDock and CKAN support are planned.
+
+1. Install the required dependencies above.
+2. Download the packaged release ZIP from [Releases](https://github.com/Armo00/ArmorControl/releases), not **Code → Download ZIP** or GitHub's automatically generated source archives.
+3. Close KSP, extract the package into its installation directory, and merge the `GameData` folders.
+4. Keep the complete `ArmorControl` directory, including the web files under `prototype` and its `Localization` folder.
+
+The installed structure should include:
+
+```text
+KSP installation/
+└── GameData/
+    └── ArmorControl/
+        ├── Plugins/ArmorControl.dll
+        ├── prototype/
+        │   ├── index.html
+        │   ├── app.js
+        │   └── Localization/
+        └── settings.cfg
+```
+
+Armor Control is independent of ArmorOverhaul. When upgrading from an older integrated installation, remove only the old ArmorControl files and DLL to avoid duplicate loading. Do not remove unrelated ArmorOverhaul content.
+
+### Open the console
+
+Start KSP. The server starts automatically by default. Use the **ArmorControl toolbar button** to check its status, change the port, or start and stop the service.
+
+| Device | Browser address |
+| --- | --- |
+| Computer running KSP | `http://127.0.0.1:8765` |
+| Another device on the same LAN | `http://<KSP-computer-LAN-IP>:8765` |
+
+For example, if the KSP computer's LAN address is `192.168.1.100`, open `http://192.168.1.100:8765` on the other device. Use the configured port if you changed it. Allow the port through the host firewall on trusted private networks if necessary.
+
+Enter the Flight scene to see the active vessel's data. The console follows the active KSP vessel.
+
+### Language
+
+Use the upper-right language selector to choose **简体中文** or **English**. The choice is saved per browser and does not change other devices. The in-game server panel has its own language setting.
+
+Contributors can edit the JSON catalogs in [`prototype/Localization`](prototype/Localization). See the [localization guide](prototype/Localization/README.md).
+
+## Introduction: page by page
+
+<details>
+<summary>Flight — live instruments</summary>
+
+A spacecraft-style navball with live attitude, altitude, speed, vertical speed, thrust, TWR, dynamic pressure, and essential orbital information.
+
+![Flight — live instruments](Screenshot/Flight%20Page.png)
+
+</details>
+
+<details>
+<summary>Flight Panel — dense telemetry</summary>
+
+Orbital, surface, performance, vessel, and flight data in a denser layout for larger screens. Includes heading, horizontal speed, angle of attack, sideslip, atmospheric pressure, biome, and suicide-burn countdown when available.
+
+![Flight Panel — dense telemetry](Screenshot/Flight%20Pannel.png)
+
+</details>
+
+<details>
+<summary>Flight Envelope — limits and engine protection</summary>
+
+Access supported MechJeb settings for maximum dynamic pressure, maximum acceleration, minimum throttle, overheating protection, and automatic staging.
+
+![Flight Envelope — limits and engine protection](Screenshot/Flight%20Envelop.png)
+
+</details>
+
+<details>
+<summary>Flight Recorder — charts and history</summary>
+
+Review altitude, speed, aerodynamics, attitude, losses, and vessel performance in separate chart groups. Switch between time and downrange distance, inspect historical samples, show staging markers, and export CSV data. Clearing the recorder starts a new recording at T+0.
+
+![Flight Recorder — charts and history](Screenshot/Recorder.png)
+
+</details>
+
+<details>
+<summary>Vessel — visualization and part controls</summary>
+
+Inspect the vessel, select and highlight parts, and find engines, RCS, lights, landing gear, cargo bays, docking ports, and other systems through quick groups.
+
+Supported actions include individual engine activation, thrust limiting, gimbal toggles, and selected part right-click actions. Depending on the part and mod, these include parachute deployment, radiator operation, decoupling, undocking, and converter controls. Compatible groups offer all-on/all-off controls. Heat visualization highlights parts approaching their thermal limits. Aerodynamic-center visualization includes FAR-aware handling where data is available.
+
+Part action support is not universal; availability also depends on the current flight state.
+
+![Vessel — visualization and part controls](Screenshot/Vessel.png)
+
+</details>
+
+<details>
+<summary>Crew — the active vessel’s manifest</summary>
+
+See who is aboard, which compartment each Kerbal occupies, and their profession. EVA is available when supported and requires confirmation.
+
+![Crew — the active vessel’s manifest](Screenshot/Crew.png)
+
+</details>
+
+<details>
+<summary>Target — selection and relative motion</summary>
+
+Browse celestial bodies and vessels through a hierarchical menu, select or clear a target, and inspect available target and relative-motion information.
+
+![Target — selection and relative motion](Screenshot/Target.png)
+
+</details>
+
+<details>
+<summary>Trajectory Prediction — impact data and ground map</summary>
+
+Access Trajectories predictions, descent attitude assumptions, display options, and computation parameters. Available predictions show impact coordinates, time to impact, impact speed, and impact-to-target distance.
+
+A north-up ground map displays the predicted path, impact point, and target, with automatic scaling and a distance scale. This page uses Trajectories’ prediction target; do not assume every target selected elsewhere in KSP is automatically copied into it.
+
+![Trajectory Prediction — impact data and ground map](Screenshot/Trajectory.png)
+
+</details>
+
+<details>
+<summary>Maneuver Planning — nodes and Porkchop selection</summary>
+
+Create and manage nodes through supported MechJeb operations, each with its relevant parameters. Advanced transfers provide a Porkchop plot for comparing departure times, transfer durations, and delta-v costs.
+
+Includes orbit previews, a node queue, execution and abort controls, and MechJeb automatic time-warp settings.
+
+![Maneuver Planning — nodes and Porkchop selection](Screenshot/Node.png)
+
+</details>
+
+<details>
+<summary>Autopilot — five MechJeb panels</summary>
+
+- **Ascent Guidance:** supported ascent profiles, orbit targets, launch timing options, guidance constraints, and live ascent and orbital readouts.
+- **Landing Guidance:** landing targets, guidance settings, prediction information, and automatic landing controls.
+- **Smart A.S.S.:** attitude modes and editable offsets, with increment/decrement buttons and selectable angular steps.
+- **Rendezvous Autopilot:** supported rendezvous settings and execution controls.
+- **Docking Autopilot:** docking controls, axis selection, forced roll, and safe-distance and starting-distance overrides.
+
+![Autopilot — five MechJeb panels](Screenshot/Autopilot.png)
+
+</details>
+
+<details>
+<summary>Basic Control — vessel systems and touch inputs</summary>
+
+Operate vessel systems, action groups 01–10, throttle, and touch-based pitch, yaw, and roll. Staging and quicksave loading use slide-to-confirm interactions.
+
+During MechJeb ascent, node execution, or automatic landing, manual web throttle control is locked. Attitude inputs remain available without automatically cancelling the MJ task.
+
+![Basic Control — vessel systems and touch inputs](Screenshot/Control.png)
+
+</details>
+
+## Troubleshooting and feedback
+
+- **Cannot open the page:** check toolbar server status, port, host LAN address, firewall, and connectivity between devices. On a phone, `127.0.0.1` refers to the phone, not the KSP computer.
+- **Page opens but data is unavailable:** check the Flight scene, active vessel, connection indicator, and dependencies.
+- **MJ actions are unavailable:** check MJ 2.14.3, an active-vessel MJ core, and any required target or node.
+- **A part action is missing:** the part, mod, or current flight state may not support it.
+
+Please [report bugs on GitHub](https://github.com/Armo00/ArmorControl/issues) with KSP/mod versions, reproduction steps, expected and actual behavior, browser/device information, and relevant logs or screenshots. Remove tokens and private information before sharing logs.
+
+## Configuration and development
+
+Server settings are in `GameData/ArmorControl/settings.cfg`; see [`settings.example.cfg`](settings.example.cfg) for defaults. Stop KSP before editing manually. Defaults include port `8765`, binding to `0.0.0.0`, automatic startup, and no access token. Configured telemetry rates are sampling targets, not guaranteed frame rates.
+
+Source is under [`Source/ArmorControl`](Source/ArmorControl). A source checkout is not an installable release: generated DLLs and local settings are ignored by Git. The current project expects to be at `GameData/ArmorControl` inside a KSP installation with the required local assemblies present. With a suitable .NET SDK and .NET Framework 4.6.1 targeting support, build from this directory:
+
+```powershell
+dotnet build Source/ArmorControl/ArmorControl.csproj -c Release
+```
+
+The DLL is written to `Plugins`; intermediate files stay outside `GameData` to avoid duplicate loading. The maintainer's verification and packaging scripts currently live in the KSP installation's external `BuildTools` directory and are not included in this repository.
+
+[Protocol notes](PROTOCOL.md) · [Localization guide](prototype/Localization/README.md) · [Release conventions](RELEASE.md)
+
+## License and credits
+
+Armor Control is published under **CC BY-NC-SA**. Third-party mods retain their own licenses and are not included in the release package.
+
+Thanks to Telemachus for the inspiration, and to the developers of MechJeb, VesselView, Trajectories, and the other mods this project integrates with.
