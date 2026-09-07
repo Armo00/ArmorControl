@@ -1,0 +1,56 @@
+/* Trajectory workspace: preserve the existing palette while using wide viewports. */
+#view-trajectory { max-width: none; padding-inline: clamp(18px,2vw,64px); }
+#view-trajectory .view-heading { margin-bottom: 18px; }
+.trajectory-summary { display: grid; grid-template-columns: repeat(6,minmax(0,1fr)); margin: 0 0 16px; background: var(--panel); border: 1px solid var(--line); }
+.trajectory-summary > div { min-width: 0; padding: 18px 20px; border-right: 1px solid var(--line); }
+.trajectory-summary > div:last-child { border-right: 0; }
+.trajectory-summary dt,.trajectory-diagnostics dt { color: var(--muted); font-size: 12px; }
+.trajectory-summary dd { margin: 10px 0 0; font: clamp(14px,.7vw,24px) "Cascadia Mono",monospace; color: var(--paper); overflow-wrap: anywhere; }
+.trajectory-summary > div:first-child dd { color: var(--cyan); }
+#view-trajectory .trajectory-layout { display: grid; grid-template-columns: minmax(0,7fr) minmax(460px,3fr); gap: 20px; align-items: start; }
+#view-trajectory .impact-console { grid-row: auto; min-width: 0; position: sticky; top: 94px; }
+#view-trajectory .impact-plot { min-height: 0; }
+#view-trajectory #trajectoryOrbitChart { width: 100%; height: clamp(420px,calc(100dvh - 430px),1500px); }
+#view-trajectory .trajectory-settings { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+#view-trajectory .trajectory-settings > section { grid-column: auto; min-width: 0; margin: 0; }
+#view-trajectory .trajectory-settings h2 { font-size: 20px; margin: 4px 0; }
+#view-trajectory .trajectory-settings > section > header { min-height: 62px; padding: 12px 16px; }
+#view-trajectory .trajectory-profile > header { display: block; }
+#view-trajectory .trajectory-profile > header small { display: block; max-width: none; font-size: 11px; line-height: 1.5; margin-top: 6px; }
+#view-trajectory .profile-head,#view-trajectory .profile-row { grid-template-columns: minmax(72px,.85fr) minmax(96px,1.1fr) minmax(70px,.85fr) minmax(68px,.8fr); gap: 8px; }
+#view-trajectory .profile-head { font-size: 11px; }
+#view-trajectory .profile-row { min-height: 56px; }
+#view-trajectory .profile-row b { font-size: 12px; }
+#view-trajectory .profile-row input,#view-trajectory .profile-row select { min-width: 0; min-height: 44px; padding: 0 8px; font-size: 12px; }
+#view-trajectory .trajectory-settings input,#view-trajectory .trajectory-settings button { min-height: 44px; }
+#view-trajectory .trajectory-settings button { font-size: 12px; }
+#view-trajectory .protection-switch b { font-size: 12px; }
+#view-trajectory .protection-switch small { font-size: 11px; }
+#view-trajectory .trajectory-coordinate-grid,#view-trajectory .trajectory-quality-grid { grid-template-columns: repeat(3,minmax(0,1fr)); }
+#view-trajectory .trajectory-coordinate-grid label:last-child,#view-trajectory .trajectory-quality-grid label:last-child { grid-column: auto; }
+#view-trajectory .trajectory-coordinate-grid label,#view-trajectory .trajectory-quality-grid label { font-size: 12px; }
+.trajectory-diagnostics { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); margin: 0; border-top: 1px solid var(--line); }
+.trajectory-diagnostics > div { padding: 12px; min-width: 0; }
+.trajectory-diagnostics dd { margin: 6px 0 0; font: 13px "Cascadia Mono",monospace; }
+#view-trajectory .trajectory-map-note { font-size: 12px; }
+@media (max-width: 1600px) {
+  .trajectory-summary { grid-template-columns: repeat(3,minmax(0,1fr)); }
+  .trajectory-summary > div { border-bottom: 1px solid var(--line-soft); padding: 12px 14px; }
+  #view-trajectory .trajectory-layout { grid-template-columns: minmax(0,1fr) 460px; gap: 14px; }
+}
+@media (max-width: 1120px) {
+  #view-trajectory .trajectory-layout { grid-template-columns: minmax(0,1fr); }
+  #view-trajectory .impact-console { position: static; }
+  #view-trajectory #trajectoryOrbitChart { height: auto; aspect-ratio: 760/390; min-height: 280px; }
+}
+@media (max-width: 600px) {
+  .trajectory-summary { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .trajectory-summary dt { font-size: 11px; }
+  .trajectory-summary dd { font-size: 14px; }
+  #view-trajectory .profile-head { display: none; }
+  #view-trajectory .profile-row { grid-template-columns: repeat(2,minmax(0,1fr)); padding: 12px 0; }
+  #view-trajectory .profile-row > b { grid-column: 1/-1; }
+  #view-trajectory .trajectory-coordinate-grid,#view-trajectory .trajectory-quality-grid { grid-template-columns: minmax(0,1fr); }
+  #view-trajectory .trajectory-target-actions,#view-trajectory .trajectory-quality-actions { grid-template-columns: minmax(0,1fr); }
+  #view-trajectory .trajectory-map-note { font-size: 11px; }
+}

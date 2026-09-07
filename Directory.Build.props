@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup>
+    <!-- Keep intermediate DLLs outside GameData: KSP scans every DLL recursively. -->
+    <BaseIntermediateOutputPath>$(MSBuildThisFileDirectory)..\..\BuildArtifacts\ArmorControl\obj\</BaseIntermediateOutputPath>
+  </PropertyGroup>
+</Project>

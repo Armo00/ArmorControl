@@ -1,0 +1,910 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#07171c">
+  <title>ArmorControl · Flight Console</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="trajectory-layout.css">
+  <link rel="stylesheet" href="localization.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="side-rail" aria-label="主导航">
+      <div class="brand" aria-label="ArmorControl">
+        <span class="brand-mark"><i></i><i></i><i></i></span>
+        <span class="brand-copy"><strong>ARMOR</strong><small>CONTROL</small></span>
+      </div>
+      <nav class="primary-nav">
+        <button class="nav-item is-active" data-view="flight" aria-label="飞行">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2v20M5 16l7 6 7-6M7 10l5-8 5 8"/></svg>
+          <span>飞行</span>
+        </button>
+        <button class="nav-item" data-view="pannel" aria-label="Flight Pannel 信息总览">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h7v6H3zM14 4h7v3h-7zM14 11h7v9h-7zM3 14h7v6H3z"/></svg>
+          <span>面板</span>
+        </button>
+        <button class="nav-item" data-view="envelope" aria-label="飞行包线与推力限制">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 18c4-9 7-12 9-12s5 3 9 12M5 18h14M8 14h8M12 6v12"/></svg>
+          <span>包线</span>
+        </button>
+        <button class="nav-item" data-view="recorder" aria-label="记录仪">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 18l4-7 4 3 4-9 6 5M3 21h18"/></svg>
+          <span>记录</span>
+        </button>
+        <button class="nav-item" data-view="vessel" aria-label="载具结构">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l4 5v9l-4 6-4-6V7l4-5ZM8 9 3 13v5l5-2M16 9l5 4v5l-5-2"/></svg>
+          <span>载具</span>
+        </button>
+        <button class="nav-item" data-view="crew" aria-label="成员名册">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="7" r="3"/><path d="M3 20v-3.5C3 13.5 5.4 11 8.5 11h1c3.1 0 5.5 2.5 5.5 5.5V20M15 5.5a3 3 0 0 1 0 5.8M17 12c2.3.7 4 2.8 4 5.5V20"/></svg>
+          <span>成员</span>
+        </button>
+        <button class="nav-item" data-view="target" aria-label="目标选择与信息">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 1v5M12 18v5M1 12h5M18 12h5"/></svg>
+          <span>目标</span>
+        </button>
+        <button class="nav-item" data-view="trajectory" aria-label="Trajectories 轨迹预测">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17c4-8 9-11 18-11M3 17c5-2 10-2 18 1M4 17l3 3M18 5l3 1-1 3"/><circle cx="14" cy="9" r="1.5"/></svg>
+          <span>轨迹</span>
+        </button>
+        <button class="nav-item" data-view="planner" aria-label="机动节点规划">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="12" rx="9" ry="4" transform="rotate(-28 12 12)"/><circle cx="7" cy="15" r="2"/><path d="M7 10v5h5"/></svg>
+          <span>节点</span>
+        </button>
+        <button class="nav-item" data-view="autopilot" aria-label="自动控制">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 5v14M5 12h14M8 8l8 8M16 8l-8 8"/></svg>
+          <span>自动</span>
+        </button>
+        <button class="nav-item" data-view="control" aria-label="控制">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3v12M18 9v12M3 8h6M15 16h6"/></svg>
+          <span>控制</span>
+        </button>
+      </nav>
+      <div class="rail-foot">
+        <span class="rt-dot"></span>
+        <span><b>RT</b><small>链路有效</small></span>
+      </div>
+    </aside>
+
+    <main class="workspace">
+      <header class="topbar">
+        <div class="vessel-id">
+          <span class="eyebrow">ACTIVE VESSEL / <span id="vesselOrdinal">07</span></span>
+          <button class="vessel-select" disabled title="网页始终跟随 KSP 当前活动载具"><span id="activeVesselName">嫦娥-吴刚</span> <span>ACTIVE</span></button>
+        </div>
+        <div class="topbar-center" aria-label="任务时间">
+          <span>MET</span><strong id="missionTime">01:42:18.4</strong>
+        </div>
+        <div class="connection-pill is-connecting" id="connectionPill">
+          <label class="language-control" data-l10n-skip><select id="languageSelect" aria-label="Language / 语言"><option value="zh-CN">简体中文</option><option value="en-US">English</option></select></label>
+          <span id="languageStatus" role="status"></span>
+          <span class="topbar-system" id="sasHeaderState" aria-label="KSP SAS 状态">SAS OFF</span>
+          <span class="pulse-dot"></span>
+          <span><b id="connectionState">正在连接</b><small id="connectionDetail"><span id="streamRate">—</span> Hz · WebSocket</small></span>
+        </div>
+      </header>
+
+      <section class="view is-active" id="view-flight" aria-labelledby="flight-title">
+        <div class="view-heading">
+          <div><span class="eyebrow">FLIGHT / LIVE</span><h1 id="flight-title">飞行状态</h1></div>
+          <div class="heading-actions">
+            <span class="mode-chip"><i></i> <span id="flightSituation">轨道飞行</span></span>
+            <button class="icon-button" id="pinFlightView" aria-label="将飞行页设为默认页面">⌖</button>
+          </div>
+        </div>
+
+        <div class="flight-deck">
+          <section class="instrument-cluster panel-cut">
+            <div class="tape tape-left">
+              <span class="tape-label">SURF SPD</span>
+              <div class="tape-scale"><i>2 450</i><i>2 475</i><b id="surfaceSpeed">2 486</b><i>2 500</i><i>2 525</i></div>
+              <small>m/s</small>
+            </div>
+
+            <div class="attitude-wrap">
+              <div class="instrument-kicker"><span>ATTITUDE</span><span>SURFACE REF</span></div>
+              <div class="attitude-orb" id="attitudeOrb">
+                <canvas class="navball-canvas" id="flightNavball" aria-label="KSP 航天姿态球"></canvas>
+                <svg class="reticle" viewBox="0 0 260 260" aria-hidden="true">
+                  <circle cx="130" cy="130" r="116"/><path d="M34 130h58m76 0h58M130 34v42m0 108v42"/>
+                  <path class="aircraft" d="M52 137h56l14 10h16l14-10h56M122 147v14h16v-14"/>
+                </svg>
+                <div class="orb-readout"><span>PITCH <b id="pitchValue">+12.4°</b></span><span>ROLL <b id="rollValue">−03.8°</b></span></div>
+              </div>
+              <div class="heading-band"><span>320</span><span>330</span><b id="headingValue">337.2°</b><span>345</span><span>355</span></div>
+            </div>
+
+            <div class="tape tape-right">
+              <span class="tape-label">ALT RADAR</span>
+              <div class="tape-scale"><i>84.1</i><i>84.3</i><b id="radarAlt">84.5</b><i>84.7</i><i>84.9</i></div>
+              <small>km</small>
+            </div>
+          </section>
+
+          <section class="primary-readouts">
+            <article class="readout hero-readout"><span>垂直速度</span><strong id="verticalSpeed">+128.6</strong><em>m/s</em><div class="sparkline"><i></i></div></article>
+            <article class="readout"><span>当前推力</span><strong id="currentThrust">1.82</strong><em>MN</em><small id="maximumThrust">最大 2.14 MN</small></article>
+            <article class="readout"><span>当地 TWR</span><strong id="localTwr">1.64</strong><em>TWR</em><small id="throttleTwr">油门 TWR 1.39</small></article>
+            <article class="readout warning-readout"><span>动压 Q</span><strong id="dynamicPressure">18.2</strong><em>kPa</em><div class="limit-bar"><i style="width:61%"></i></div></article>
+          </section>
+        </div>
+
+        <section class="status-strip" aria-label="关键状态">
+          <div><span>APOAPSIS</span><b id="currentApoapsis">112.4 km</b><small id="timeToApoapsis">T− 00:41</small></div>
+          <div><span>PERIAPSIS</span><b id="currentPeriapsis" data-pe="-18.7">−18.7 km</b><small id="periapsisStatus">SUB-ORBITAL</small></div>
+          <div><span>ΔV / TOTAL</span><b id="totalDeltaV">—</b><small id="stageDeltaV">STAGE —</small></div>
+          <div><span>G-FORCE</span><b id="gForceValue">1.18 g</b><small id="peakG">PEAK —</small></div>
+          <div class="status-ok"><span>ARMOR LINK</span><b id="armorLinkState">CONNECTING</b><small id="armorLinkLatency">RTT —</small></div>
+        </section>
+
+        <section class="telemetry-ledger">
+          <header class="ledger-head">
+            <div><span class="eyebrow">MECHJEB DATASET</span><h2>Flight Pannel 信息</h2></div>
+            <div class="segment-tabs" role="tablist">
+              <button class="is-active" data-group="orbit">轨道</button><button data-group="surface">地表</button>
+              <button data-group="performance">性能</button><button data-group="vessel-info">载具</button><button data-group="flight-data">飞行</button>
+            </div>
+          </header>
+          <div class="ledger-group is-active" data-ledger="orbit">
+            <div class="ledger-feature"><span>当前轨道</span><div class="orbit-summary-values"><b>AP 112.4 km</b><b class="pe-value is-negative" data-pe="-18.7">PE −18.7 km</b></div><small>Kerbin · SOI 内 · 顺行</small></div>
+            <div class="data-cell"><span>倾角</span><b>19.640°</b></div><div class="data-cell"><span>周期</span><b>32m 14s</b></div>
+            <div class="data-cell"><span>轨道速度</span><b>2 486 m/s</b></div><div class="data-cell"><span>到远拱点</span><b>00:41.2</b></div>
+            <div class="data-cell"><span>到近拱点</span><b>16:48.5</b></div><div class="data-cell"><span>SOI 转换</span><b>N/A</b></div>
+            <div class="data-cell"><span>离心率</span><b>0.084</b></div>
+          </div>
+          <div class="ledger-group" data-ledger="surface">
+            <div class="data-cell"><span>载具底部高度</span><b>84.48 km</b></div><div class="data-cell"><span>坐标</span><b>0° 06′ 14″ N<br>74° 31′ 08″ W</b></div>
+            <div class="data-cell"><span>航向</span><b>337.2°</b></div><div class="data-cell"><span>表面重力</span><b>9.81 m/s²</b></div>
+            <div class="data-cell"><span>地表速度</span><b>2 486 m/s</b></div><div class="data-cell"><span>垂直速度</span><b>+128.6 m/s</b></div>
+            <div class="data-cell"><span>水平地表速度</span><b>2 482 m/s</b></div>
+          </div>
+          <div class="ledger-group" data-ledger="performance">
+            <div class="data-cell"><span>最大加速度</span><b>18.93 m/s²</b></div><div class="data-cell"><span>当前推力加速度</span><b>16.08 m/s²</b></div>
+            <div class="data-cell"><span>最大推力</span><b>2.14 MN</b></div><div class="data-cell"><span>当前推力</span><b>1.82 MN</b></div>
+            <div class="data-cell"><span>海平面 TWR</span><b>1.92</b></div><div class="data-cell"><span>当地 TWR</span><b>1.64</b></div>
+            <div class="data-cell"><span>当前油门 TWR</span><b>1.39</b></div><div class="data-cell"><span>当前 G 力</span><b>1.18 g</b></div>
+            <div class="data-cell"><span>当前级 Δv</span><b>1 104 / 1 248 m/s</b></div><div class="data-cell"><span>总 Δv</span><b>3 515 / 3 842 m/s</b></div>
+            <div class="data-cell"><span>当前油门剩余</span><b>01:14</b></div><div class="data-cell"><span>满油门剩余</span><b>01:03</b></div>
+            <div class="data-cell"><span>悬停剩余</span><b>02:16</b></div>
+            <div class="data-cell"><span>大气阻力加速度</span><b>3.42 m/s²</b></div>
+            <div class="data-cell"><span>终端速度</span><b>3 014 m/s</b></div>
+          </div>
+          <div class="ledger-group" data-ledger="vessel-info">
+            <div class="data-cell"><span>乘员容量</span><b>7</b></div><div class="data-cell"><span>当前乘员</span><b>4</b></div>
+            <div class="data-cell"><span>干质量</span><b>71.382 t</b></div><div class="data-cell"><span>当前质量</span><b>113.248 t</b></div>
+            <div class="data-cell"><span>零件数</span><b>184</b></div><div class="data-cell"><span>载具成本</span><b>1.284 M</b></div>
+          </div>
+          <div class="ledger-group" data-ledger="flight-data">
+            <div class="data-cell"><span>航向 Heading</span><b>337.2°</b></div><div class="data-cell"><span>地表速度</span><b>2 486 m/s</b></div>
+            <div class="data-cell"><span>水平地表速度</span><b>2 482 m/s</b></div><div class="data-cell"><span>垂直速度</span><b>+128.6 m/s</b></div>
+            <div class="data-cell"><span>迎角 AoA</span><b>+2.36°</b></div><div class="data-cell"><span>侧滑角 Angle of Sideslip</span><b>−0.14°</b></div>
+            <div class="data-cell"><span>大气压力</span><b>2.41 kPa</b></div><div class="data-cell"><span>当前 Biome</span><b>Kerbin 高空</b></div>
+            <div class="data-cell"><span>飞行动压</span><b>18.2 kPa</b></div>
+            <div class="ledger-feature alert"><span>自杀点火倒计时</span><b>T− 01:42.8</b><small>预测值 · 推力变化会重新计算</small></div>
+            <div class="data-cell"><span>撞击倒计时</span><b>T− 03:11.4</b></div>
+            <div class="data-cell"><span>最近交会距离</span><b>2.84 km</b></div><div class="data-cell"><span>当前目标距离</span><b>18.41 km</b></div>
+          </div>
+        </section>
+      </section>
+
+      <section class="view fp-view" id="view-pannel" aria-labelledby="pannel-title">
+        <div class="view-heading fp-heading">
+          <div><span class="eyebrow">MECHJEB DATASET / 45 TELEMETRY + 3 OPERATIONS</span><h1 id="pannel-title">Flight Pannel</h1></div>
+          <div class="fp-freshness"><span class="pulse-dot"></span><div><b id="flightPanelState">等待数据</b><small id="flightPanelRate">FAST / REGULAR / MECHJEB</small></div></div>
+        </div>
+
+        <section class="fp-summary" aria-label="飞行关键摘要">
+          <div class="fp-summary-primary"><span>垂直速度</span><b>+128.6</b><small>m/s</small></div>
+          <div><span>地表速度</span><b>2 486</b><small>m/s</small></div>
+          <div><span>海拔高度</span><b>84.48</b><small>km</small></div>
+          <div><span>远拱点</span><b>112.4</b><small>km</small></div>
+          <div class="is-negative" data-pe="-18.7"><span>近拱点</span><b>−18.7</b><small>km</small></div>
+          <div><span>总 Δv</span><b>3 842</b><small>m/s VAC</small></div>
+          <div><span>动压</span><b>18.2</b><small>kPa</small></div>
+          <div><span>当前质量</span><b>113.25</b><small>t</small></div>
+        </section>
+
+        <div class="fp-grid">
+          <section class="fp-module">
+            <header><h2>轨道</h2><span>ORBIT · 08</span></header>
+            <div class="fp-row fp-row-wide"><span>当前轨道</span><div class="orbit-summary-values"><b>AP 112.4 km</b><b class="pe-value is-negative" data-pe="-18.7">PE −18.7 km</b></div></div>
+            <div class="fp-row"><span>倾角</span><b>19.640°</b></div>
+            <div class="fp-row"><span>周期</span><b>32m 14s</b></div>
+            <div class="fp-row"><span>轨道速度</span><b>2 524 m/s</b></div>
+            <div class="fp-row"><span>到远拱点</span><b>00:41.2</b></div>
+            <div class="fp-row"><span>到近拱点</span><b>16:48.5</b></div>
+            <div class="fp-row"><span>SOI 转换</span><b>N/A</b></div>
+            <div class="fp-row"><span>离心率</span><b>0.084</b></div>
+          </section>
+
+          <section class="fp-module">
+            <header><h2>地表</h2><span>SURFACE · 07</span></header>
+            <div class="fp-row"><span>载具底部高度</span><b>84.48 km</b></div>
+            <div class="fp-row fp-row-coordinate"><span>坐标</span><b>0° 06′ 14″ N<br>74° 31′ 08″ W</b></div>
+            <div class="fp-row"><span>航向</span><b>337.2°</b></div>
+            <div class="fp-row"><span>表面重力</span><b>9.81 m/s²</b></div>
+            <div class="fp-row"><span>地表速度</span><b>2 486 m/s</b></div>
+            <div class="fp-row"><span>垂直速度</span><b class="value-up">+128.6 m/s</b></div>
+            <div class="fp-row"><span>水平地表速度</span><b>2 482 m/s</b></div>
+          </section>
+
+          <section class="fp-module fp-module-wide performance-module">
+            <header><h2>性能</h2><span>PERFORMANCE · 15</span></header>
+            <div class="fp-row"><span>最大加速度</span><b>18.93 m/s²</b></div>
+            <div class="fp-row"><span>当前推力加速度</span><b>16.08 m/s²</b></div>
+            <div class="fp-row"><span>最大推力</span><b>2.14 MN</b></div>
+            <div class="fp-row"><span>当前推力</span><b>1.82 MN</b></div>
+            <div class="fp-row"><span>海平面 TWR</span><b>1.92</b></div>
+            <div class="fp-row"><span>当地 TWR</span><b>1.64</b></div>
+            <div class="fp-row"><span>当前油门 TWR</span><b>1.39</b></div>
+            <div class="fp-row"><span>当前 G 力</span><b>1.18 g</b></div>
+            <div class="fp-row"><span>当前级 Δv · ATM / VAC</span><b>1 104 / 1 248 m/s</b></div>
+            <div class="fp-row"><span>总 Δv · ATM / VAC</span><b>3 515 / 3 842 m/s</b></div>
+            <div class="fp-row"><span>当前油门剩余</span><b>01:14</b></div>
+            <div class="fp-row"><span>满油门剩余</span><b>01:03</b></div>
+            <div class="fp-row"><span>悬停剩余</span><b>02:16</b></div>
+            <div class="fp-row"><span>大气阻力加速度</span><b>3.42 m/s²</b></div>
+            <div class="fp-row"><span>终端速度</span><b>3 014 m/s</b></div>
+          </section>
+
+          <section class="fp-module vessel-data-module">
+            <header><h2>载具</h2><span>VESSEL · 06</span></header>
+            <div class="fp-row"><span>乘员容量</span><b>7</b></div>
+            <div class="fp-row"><span>当前乘员</span><b>4</b></div>
+            <div class="fp-row"><span>干质量</span><b>71.382 t</b></div>
+            <div class="fp-row"><span>当前质量</span><b>113.248 t</b></div>
+            <div class="fp-row"><span>零件数</span><b>184</b></div>
+            <div class="fp-row"><span>载具成本</span><b>1.284 M</b></div>
+          </section>
+
+          <section class="fp-module fp-module-wide danger-module flight-module">
+            <header><h2>飞行</h2><span>FLIGHT · 09 + LIVE 04</span></header>
+            <div class="fp-row flight-live"><span>航向 Heading</span><b>337.2°</b></div>
+            <div class="fp-row flight-live"><span>地表速度</span><b>2 486 m/s</b></div>
+            <div class="fp-row flight-live"><span>水平地表速度</span><b>2 482 m/s</b></div>
+            <div class="fp-row flight-live"><span>垂直速度</span><b class="value-up">+128.6 m/s</b></div>
+            <div class="fp-row"><span>迎角 AoA</span><b>+2.36°</b></div>
+            <div class="fp-row"><span>侧滑角 Angle of Sideslip</span><b>−0.14°</b></div>
+            <div class="fp-row"><span>大气压力</span><b>2.41 kPa</b></div>
+            <div class="fp-row"><span>当前 Biome</span><b>Kerbin 高空</b></div>
+            <div class="fp-row"><span>飞行动压</span><b class="value-warn">18.2 kPa</b></div>
+            <div class="fp-row"><span>自杀点火倒计时</span><b class="value-danger">T− 01:42.8</b></div>
+            <div class="fp-row"><span>撞击倒计时</span><b>T− 03:11.4</b></div>
+            <div class="fp-row"><span>最近交会距离</span><b>2.84 km</b></div>
+            <div class="fp-row"><span>当前目标距离</span><b>18.41 km</b></div>
+          </section>
+        </div>
+
+        <section class="fp-operations" aria-label="Flight Pannel 操作状态">
+          <header><h2>操作状态</h2><span>03 / READBACK</span></header>
+          <div data-operation-state="autostage"><span class="operation-light"></span><p><b>自动分级</b><small>等待状态</small></p></div>
+          <div data-operation-state="solar"><span class="operation-light"></span><p><b>太阳能板</b><small>等待状态</small></p></div>
+          <div data-operation-state="antenna"><span class="operation-light"></span><p><b>天线</b><small>等待状态</small></p></div>
+          <small class="fp-operation-note">此页只读；控制操作集中在「控制」页</small>
+        </section>
+      </section>
+
+      <section class="view" id="view-recorder" aria-labelledby="recorder-title">
+        <div class="view-heading">
+          <div><span class="eyebrow">MECHJEB / ENHANCED STREAM</span><h1 id="recorder-title">飞行记录仪</h1></div>
+          <div class="rec-state"><span class="rec-dot"></span><span><b id="recState">等待样本</b><small><span id="sampleCount">0</span> samples · 实时增量</small></span></div>
+        </div>
+
+        <section class="recorder-toolbar panel-cut">
+          <div class="toolbar-group axis-toggle"><span>横轴</span><button class="is-active" data-axis="time">时间</button><button data-axis="range">下行距离</button></div>
+          <div class="toolbar-group"><label class="check"><input id="stageLines" type="checkbox" checked><span></span>级段标线</label><small class="recorder-scale-note">同单位共享刻度 · 双单位分列左右轴</small></div>
+          <div class="toolbar-actions"><button class="soft-button recorder-clear" id="clearRecorder">清屏 · T+0</button><button class="soft-button" id="pauseButton">Ⅱ 暂停</button><button class="soft-button" id="exportRecorder">⇩ CSV</button></div>
+        </section>
+
+        <nav class="recorder-groups" id="recorderGroups" aria-label="记录图组">
+          <button class="is-active" data-recorder-group="trajectory"><span>轨迹</span><small>高度</small></button>
+          <button data-recorder-group="velocity"><span>速度</span><small>地表 / 轨道</small></button>
+          <button data-recorder-group="aero"><span>气动</span><small>动压 / 气流角</small></button>
+          <button data-recorder-group="attitude"><span>姿态</span><small>俯仰 / 位移角</small></button>
+          <button data-recorder-group="losses"><span>损失</span><small>Δv 账本</small></button>
+          <button data-recorder-group="vehicle"><span>载具</span><small>质量 / G 力</small></button>
+        </nav>
+
+        <section class="chart-panel">
+          <header><div><span class="eyebrow" id="recorderGroupKicker">TRAJECTORY</span><h2 id="recorderChartTitle">高度剖面</h2><small id="recorderChartHint">海平面高度与真实高度共享同一刻度</small></div><button class="chart-cursor" id="recorderLatest" type="button"><span id="recorderCursorMode">最新样本</span><b id="recorderCursorTime">T+ 00:00.0</b><small>点按回到实时</small></button></header>
+          <div class="chart-stage" id="recorderChartStage">
+            <div class="y-label y-left" id="recorderLeftLabel">高度 / km</div><div class="y-label y-right" id="recorderRightLabel" hidden></div>
+            <svg id="flightChart" viewBox="0 0 1200 480" preserveAspectRatio="none" role="img" aria-label="飞行记录曲线">
+              <g class="grid-lines"><path d="M0 30H1200M0 132.5H1200M0 235H1200M0 337.5H1200M0 440H1200"/><path d="M0 30V440M240 30V440M480 30V440M720 30V440M960 30V440M1200 30V440"/></g>
+              <g id="recorderLineGroup"></g>
+              <g class="stage-lines" id="stageLineGroup"></g>
+              <g class="recorder-cursor" id="recorderCursorGroup" hidden><line class="cursor-line" x1="0" y1="30" x2="0" y2="440"/><g id="recorderCursorPoints"></g></g>
+              <rect class="chart-touch-target" x="0" y="30" width="1200" height="410"/>
+            </svg>
+            <div class="chart-ticks y-ticks y-ticks-left" id="recorderLeftTicks"><span>—</span><span>—</span><span>—</span><span>—</span><span>—</span></div>
+            <div class="chart-ticks y-ticks y-ticks-right" id="recorderRightTicks" hidden><span>—</span><span>—</span><span>—</span><span>—</span><span>—</span></div>
+            <div class="chart-ticks x-ticks" id="recorderXTicks"><span>—</span><span>—</span><span>—</span><span>—</span><span>—</span><span>—</span></div>
+            <div class="chart-gesture-hint">触摸并拖动查看历史</div>
+          </div>
+          <footer class="chart-now"><div><span id="recSnapshotLabel">最新样本</span><b id="recSnapshotTime">T+ 00:00.0</b></div><div><span>下行距离</span><b id="recDownrange">—</b></div><div><span>当前级</span><b id="recStage">—</b></div><div><span>海平面高度</span><b id="recAltitude">—</b></div><div><span>采样</span><b id="recSampleRate">—</b></div></footer>
+        </section>
+
+        <section class="series-panel">
+          <header><div><span class="eyebrow">当前图组</span><h2>通道与实时读数</h2></div><button class="text-button" id="toggleAllRecorder">隐藏本组</button></header>
+          <div class="series-grid" id="recorderSeriesGrid"></div>
+        </section>
+      </section>
+
+      <section class="view" id="view-vessel" aria-labelledby="vessel-title">
+        <div class="view-heading">
+          <div><span class="eyebrow">LIVE VESSEL VIEW</span><h1 id="vessel-title">载具</h1></div>
+          <div class="mode-selector"><button data-mode="state">状态</button><button data-mode="stage">级段</button><button class="is-active" data-mode="heat">温度</button><button data-mode="resource">资源</button><button data-mode="topology">结构树</button></div>
+        </div>
+        <div class="vessel-layout">
+          <section class="vessel-canvas panel-cut">
+            <div class="canvas-meta"><span id="vesselViewLabel">VIEW / ISOMETRIC</span><span id="vesselPartCount">184 PARTS</span></div>
+            <div class="vessel-render-stage" id="vesselRenderStage">
+              <div class="vessel-render-surface" id="vesselRenderSurface">
+                <img id="vesselRenderImage" alt="游戏内实时载具网格投影">
+                <div class="aero-center-marker" id="aeroCenterMarker" hidden aria-label="FAR 当前气动中心"><i></i><span>FAR AC</span></div>
+              </div>
+              <div class="vessel-render-wait" id="vesselRenderStatus"><i></i><span>正在等待游戏渲染载具</span><small>网格低频更新 · 数据 5 Hz</small></div>
+            </div>
+            <svg class="vehicle-svg topology-view" id="vehicleSvg" viewBox="0 0 680 760" role="img" aria-label="载具零件结构树" hidden>
+              <g class="axis-lines"><path d="M340 60V700M90 610H590"/><text x="350" y="74">+Y</text><text x="575" y="600">+X</text></g>
+              <g class="vehicle-connections" id="vehicleConnections"></g>
+              <g class="vehicle-parts" id="vehicleParts"></g>
+              <g class="callout"><text id="vesselSelectedId" x="470" y="92">SELECTED / —</text><text id="vesselSelectedName" x="470" y="113">WAITING</text></g>
+            </svg>
+            <div class="canvas-tools"><button data-canvas-action="out" aria-label="缩小">−</button><button data-canvas-action="fit" aria-label="适合视图">⌗</button><button data-canvas-action="in" aria-label="放大">＋</button><button data-canvas-action="rotate" aria-label="旋转">↻</button></div>
+            <div class="aero-center-readout" id="aeroCenterReadout" hidden><span><i></i>FAR 气动中心</span><b>等待气动力数据</b><small>CoM 参考偏移 —</small></div>
+            <div class="heat-legend"><span>温度 / 零件上限</span><i></i><small>＜80% 暗色</small><small>80–100% 黄→红</small></div>
+          </section>
+          <section class="part-action-panel panel-cut" aria-labelledby="part-action-title">
+            <header><div><span>所选零件操作</span><h2 id="part-action-title">请选择零件</h2></div><small id="partActionMeta">右键菜单的可远程操作会显示在这里</small></header>
+            <div class="part-action-stack" id="partControlStack"><p class="part-control-empty">从载具画面或右侧列表选择一个零件</p></div>
+          </section>
+          <aside class="part-inspector">
+            <header><span class="eyebrow">PART / P-104</span><h2 id="partName">核心级液氧箱</h2><small>Size 3 Kerbodyne Tank · Stage 2</small></header>
+            <div class="part-health"><div><span>内部温度</span><b>614 K</b><small>/ 2 000 K</small></div><div><span>蒙皮温度</span><b>782 K</b><small>/ 2 400 K</small></div></div>
+            <div class="resource-stack"><h3>资源</h3><div class="resource"><span>LiquidFuel <b>71%</b></span><i><em style="width:71%"></em></i><small>12 486 / 17 600 u</small></div><div class="resource oxidizer"><span>Oxidizer <b>73%</b></span><i><em style="width:73%"></em></i><small>15 694 / 21 560 u</small></div></div>
+            <dl class="part-facts"><div><dt>质量</dt><dd>42.81 t</dd></div><div><dt>父零件</dt><dd>上面级分离器</dd></div><div><dt>子零件</dt><dd>7</dd></div><div><dt>撞击容限</dt><dd>6 m/s</dd></div></dl>
+            <section class="part-index"><header><h3>快速查找零件</h3><input id="partSearch" type="search" placeholder="搜索名称或资源" aria-label="搜索当前载具零件"></header><div class="part-quick-groups" role="tablist"><button class="is-active" data-part-group="all">全部</button><button data-part-group="engine">引擎</button><button data-part-group="rcs">RCS</button><button data-part-group="cargo">货舱</button><button data-part-group="gear">起落架</button><button data-part-group="light">灯光</button><button data-part-group="control">控制面</button><button data-part-group="dock">对接口</button><button data-part-group="power">能源</button></div><div class="part-group-actions" id="partGroupActions" hidden><span id="partGroupActionLabel">GROUP CONTROL</span><button data-group-enabled="false">全部关闭</button><button class="is-on" data-group-enabled="true">全部开启</button></div><div id="partIndexList"></div></section>
+          </aside>
+        </div>
+      </section>
+
+      <section class="view target-view" id="view-target" aria-labelledby="target-title">
+        <div class="view-heading">
+          <div><span class="eyebrow">KSP / MECHJEB TARGET CONTROLLER</span><h1 id="target-title">目标</h1></div>
+          <div class="target-live-state"><span>当前目标</span><b id="targetCurrentName">未选择</b></div>
+        </div>
+        <div class="target-layout">
+          <section class="target-browser guidance-card">
+            <header><h2>目标目录</h2><span id="targetCatalogCount">等待 KSP</span></header>
+            <div class="target-filter"><input id="targetSearch" type="search" placeholder="搜索天体、载具或对接口" aria-label="搜索目标"><button id="expandTargetTree">展开全部</button></div>
+            <div class="target-tree" id="targetTree"><p class="target-empty">等待目标目录遥测</p></div>
+          </section>
+          <section class="target-inspector guidance-card">
+            <header><h2>目标详情</h2><span id="targetKindBadge">NO TARGET</span></header>
+            <div class="target-hero">
+              <span class="target-glyph">⌾</span>
+              <p><small id="targetParentBody">—</small><b id="targetSelectedName">请选择目标</b><em id="targetSelectedType">天体 / 载具 / 对接口</em></p>
+            </div>
+            <dl class="target-readout">
+              <div><dt>当前距离</dt><dd id="targetDistance">—</dd></div>
+              <div><dt>相对速度</dt><dd id="targetRelativeSpeed">—</dd></div>
+              <div><dt>目标 AP</dt><dd id="targetApoapsis">—</dd></div>
+              <div><dt>目标 PE</dt><dd id="targetPeriapsis">—</dd></div>
+              <div><dt>目标倾角</dt><dd id="targetInclination">—</dd></div>
+              <div><dt>轨道周期</dt><dd id="targetPeriod">—</dd></div>
+            </dl>
+            <div class="target-actions"><button class="soft-button" id="clearTarget">清除当前目标</button><button class="primary-action" id="applyTarget" disabled>设为 KSP 目标</button></div>
+          </section>
+        </div>
+      </section>
+
+      <section class="view planner-view" id="view-planner" aria-labelledby="planner-title">
+        <div class="view-heading">
+          <div><span class="eyebrow">MECHJEB / MANEUVER PLANNER</span><h1 id="planner-title">节点规划</h1></div>
+          <div class="planner-status"><span class="mode-chip"><i></i> 目标：天宫空间站</span><b>2 NODES</b></div>
+        </div>
+        <div class="automation-global-options planner-global-options"><label class="check"><input id="autoWarpPlanner" type="checkbox"><span></span>允许自动时间加速</label><small>与 MechJeb 节点执行器的 Auto-warp 共用同一状态；普通节点与高级轨道转移均生效</small></div>
+
+        <div class="planner-layout">
+          <aside class="maneuver-catalog">
+            <header><h2>机动类型</h2><span>17 OPERATIONS</span></header>
+            <div class="maneuver-list">
+              <button class="is-active" data-operation="circularize" data-maneuver="圆化轨道"><span>圆化轨道</span><small>CIRCULARIZE</small></button>
+              <button data-operation="periapsis" data-maneuver="变更近拱点"><span>变更近拱点</span><small>CHANGE PE</small></button>
+              <button data-operation="apoapsis" data-maneuver="变更远拱点"><span>变更远拱点</span><small>CHANGE AP</small></button>
+              <button data-operation="apsides" data-maneuver="修改远拱点与近拱点"><span>修改 AP / PE</span><small>CHANGE APSIDES</small></button>
+              <button data-operation="inclination" data-maneuver="修改轨道倾角"><span>修改轨道倾角</span><small>INCLINATION</small></button>
+              <button data-operation="lan" data-maneuver="修改升交点经度"><span>修改升交点经度</span><small>LAN</small></button>
+              <button data-operation="semimajor" data-maneuver="变更半长轴"><span>变更半长轴</span><small>SEMI-MAJOR AXIS</small></button>
+              <button data-operation="longitude" data-maneuver="变更拱点地面经度"><span>拱点地面经度</span><small>SURFACE LONGITUDE</small></button>
+              <button data-operation="hohmann" data-maneuver="霍曼转移到目标"><span>霍曼转移到目标</span><small>HOHMANN TRANSFER</small></button>
+              <button data-operation="correction" data-maneuver="微调捕获轨道"><span>微调捕获轨道</span><small>COURSE CORRECTION</small></button>
+              <button data-operation="intercept" data-maneuver="在选定时间拦截目标"><span>选定时间拦截目标</span><small>INTERCEPT</small></button>
+              <button data-operation="planes" data-maneuver="匹配目标轨道平面"><span>匹配目标轨道平面</span><small>MATCH PLANES</small></button>
+              <button data-operation="velocity" data-maneuver="匹配目标速度"><span>匹配目标速度</span><small>MATCH VELOCITY</small></button>
+              <button data-operation="resonant" data-maneuver="共振轨道"><span>共振轨道</span><small>RESONANT ORBIT</small></button>
+              <button data-operation="moonreturn" data-maneuver="从卫星返回"><span>从卫星返回</span><small>MOON RETURN</small></button>
+              <button data-operation="planettransfer" data-maneuver="转移到另一星球"><span>转移到另一星球</span><small>PLANET TRANSFER</small></button>
+              <button data-operation="advanced" data-maneuver="高级轨道转移"><span>高级轨道转移</span><small>ADVANCED TRANSFER</small></button>
+            </div>
+          </aside>
+
+          <div class="planner-workspace">
+            <section class="orbit-preview">
+              <header><div><span>计划预览</span><h2 id="maneuverName">圆化轨道</h2></div><div class="node-dv"><span>节点 Δv</span><b id="nodeDv">等待解算</b></div></header>
+              <div class="orbit-map">
+                <svg id="plannerOrbitChart" viewBox="0 0 760 390" role="img" aria-label="当前轨道与首个节点执行后轨道"><g class="live-orbit-geometry"></g><text id="plannerNodeMapLabel" x="16" y="24">等待 KSP 节点</text><text id="orbitMapBody" x="16" y="370">—</text></svg>
+                <div class="orbit-legend"><span><i class="current"></i>当前轨道</span><span><i class="planned"></i>节点后轨道</span></div>
+              </div>
+              <footer><div><span>当前 AP / PE</span><b id="plannerCurrentApsides">等待遥测</b></div><div><span>计划结果</span><b id="plannedOrbit">提交后由 MechJeb 回显</b></div><div><span>节点状态</span><b id="plannedBurn">—</b></div><div><span>节点时间</span><b id="plannedTime">—</b></div></footer>
+            </section>
+
+            <section class="maneuver-setup" id="maneuverSetup">
+              <header><h2>节点参数</h2><span id="operationCode">CIRCULARIZE</span></header>
+              <div class="setup-grid" id="operationFields"></div>
+              <div class="planner-options"><div class="node-mode"><button class="is-active">新建节点</button><button>更改最后一个节点</button></div></div>
+              <div class="planner-actions"><button class="soft-button" id="createManeuver">创建节点</button><button class="primary-action" id="createExecuteManeuver">创建并执行</button></div>
+            </section>
+
+            <section class="porkchop-panel" id="porkchopPanel" aria-labelledby="porkchopTitle">
+              <header>
+                <div><span class="eyebrow" id="porkRouteLabel">INTERPLANETARY SOLVER / — → —</span><h2 id="porkchopTitle">高级轨道转移</h2></div>
+                <div class="solver-state"><i></i><span><b>解算完成</b><small>160 × 200 SAMPLES</small></span></div>
+              </header>
+              <div class="transfer-modes" role="tablist"><button data-transfer-mode="limited">限定到达时间</button><button class="is-active" data-transfer-mode="porkchop">Porkchop Selection</button></div>
+              <div class="porkchop-body">
+                <div class="porkchop-chart-wrap">
+                  <div class="chart-toolbar"><span>总 Δv 等值图 <small>点击或拖动以选择解</small></span><button id="resetPorkchop">重置范围</button></div>
+                  <svg id="porkchopChart" class="porkchop-chart" viewBox="0 0 760 420" role="img" aria-label="出发时间与转移时长的总速度增量等值图">
+                    <defs><linearGradient id="porkBg" x1="0" y1="1" x2="1" y2="0"><stop stop-color="#174a91"/><stop offset=".3" stop-color="#3dc8db"/><stop offset=".55" stop-color="#8bdd78"/><stop offset=".76" stop-color="#ffe067"/><stop offset="1" stop-color="#e94f5f"/></linearGradient></defs>
+                    <rect class="plot-bg" x="82" y="24" width="640" height="328" rx="1" fill="url(#porkBg)"/>
+                    <image id="porkHeatmap" x="82" y="24" width="640" height="328" preserveAspectRatio="none" opacity="0"/>
+                    <path class="contour hot" d="M82 40C228 18 343 78 431 160s176 83 291 20V24H82Z"/>
+                    <path class="contour warm" d="M82 324c87-33 141-107 213-168 81-69 172-72 239-18 57 46 105 55 188 23v191H82Z"/>
+                    <path class="contour cool" d="M157 352c40-77 88-150 158-196 66-43 131-36 172 6 38 39 49 102 20 190Z"/>
+                    <path class="contour best" d="M265 352c12-65 38-120 81-151 42-30 84-22 105 12 20 34 15 86-13 139Z"/>
+                    <g class="plot-grid"><path d="M82 106H722M82 188H722M82 270H722M210 24V352M338 24V352M466 24V352M594 24V352"/></g>
+                    <g class="axis-labels"><text x="82" y="374" data-pork-departure-tick="0">—</text><text x="210" y="374" data-pork-departure-tick="0.2">—</text><text x="338" y="374" data-pork-departure-tick="0.4">—</text><text x="466" y="374" data-pork-departure-tick="0.6">—</text><text x="594" y="374" data-pork-departure-tick="0.8">—</text><text x="722" y="374" text-anchor="end" data-pork-departure-tick="1">—</text><text x="70" y="352" text-anchor="end" data-pork-duration-tick="0">—</text><text x="70" y="270" text-anchor="end" data-pork-duration-tick="0.25">—</text><text x="70" y="188" text-anchor="end" data-pork-duration-tick="0.5">—</text><text x="70" y="106" text-anchor="end" data-pork-duration-tick="0.75">—</text><text x="70" y="30" text-anchor="end" data-pork-duration-tick="1">—</text><text x="402" y="408" text-anchor="middle">出发时间 / DEPARTURE DATE →</text><text transform="translate(18 190) rotate(-90)" text-anchor="middle">转移时长 / TRANSIT DURATION →</text></g>
+                    <g id="porkMinimum" class="pork-minimum" transform="translate(383 226)"><circle r="8"/><path d="M-12-12L12 12M12-12L-12 12"/><text x="14" y="-12">MIN</text></g>
+                    <g id="porkSelection" class="pork-selection" transform="translate(383 226)"><circle r="12"/><path d="M-20 0H20M0-20V20"/></g>
+                  </svg>
+                  <div class="dv-scale"><div><span>低 Δv</span><span>高 Δv / 饱和</span></div><i></i><div class="dv-scale-ticks"><b data-pork-dv-tick="0">—</b><b data-pork-dv-tick="0.333">—</b><b data-pork-dv-tick="0.667">—</b><b data-pork-dv-tick="1">—</b></div></div>
+                </div>
+                <aside class="transfer-inspector">
+                  <div class="target-route"><span>起点<b id="porkOriginBody">—</b></span><i>→</i><span>目标<b id="porkTargetBody">未选择</b></span></div>
+                  <div class="transfer-options"><label class="check"><input id="captureBurn" type="checkbox" checked><span></span>包括捕获燃烧</label><label><span>目标近拱点</span><div class="unit-input"><input value="60" inputmode="decimal"><b>km</b></div></label></div>
+                  <div class="selection-actions"><span>选择方案</span><div><button id="lowestDv">最低 Δv</button><button id="asapTransfer">尽快出发</button></div></div>
+                  <dl class="transfer-readout"><div><dt>出发倒计时</dt><dd id="porkDeparture">等待解算</dd></div><div><dt>转移时长</dt><dd id="porkDuration">—</dd></div><div><dt>出发燃烧</dt><dd id="porkEjection">节点创建时生成</dd></div><div><dt>捕获燃烧</dt><dd id="porkCapture">—</dd></div><div class="total"><dt>总 Δv</dt><dd id="porkTotal">—</dd></div></dl>
+                  <div class="planner-actions"><button class="soft-button" id="createPorkchop">创建节点</button><button class="primary-action" id="createExecutePorkchop">创建并执行</button></div>
+                </aside>
+              </div>
+              <div class="limited-transfer" id="limitedTransfer"><div><span>最迟到达时间</span><div class="unit-input"><input value="420" inputmode="decimal"><b>days</b></div></div><p>解算器会在时间上限内寻找最低 Δv 方案，不显示二维选择图。</p></div>
+            </section>
+
+            <section class="node-queue">
+              <header><h2>节点队列</h2><span id="nodeQueueCount">0 QUEUED</span></header>
+              <div id="nodeQueueEntries"></div>
+              <p class="setup-note" id="emptyNodeQueue">当前没有机动节点。</p>
+              <footer><button class="soft-button" data-command="mechjeb.node.executeOne">执行下一个</button><button class="soft-button" data-command="mechjeb.node.executeAll">执行全部</button><button id="abortNodeExecution" class="soft-button" data-command="mechjeb.node.abort">中止节点执行</button><button class="danger-button" data-command="mechjeb.node.removeAll">移除全部</button></footer>
+            </section>
+          </div>
+        </div>
+      </section>
+
+      <section class="view autopilot-view" id="view-autopilot" aria-labelledby="autopilot-title">
+        <div class="view-heading">
+          <div><span class="eyebrow">MECHJEB / GUIDANCE MODULES</span><h1 id="autopilot-title">自动控制</h1></div>
+          <div class="autopilot-state"><span></span><p><b>当前未接管</b><small>MANUAL CONTROL</small></p></div>
+        </div>
+
+        <div class="autopilot-tabs" role="tablist">
+          <button class="is-active" data-auto-panel="ascent"><span>自动发射</span><small>ASCENT GUIDANCE</small></button>
+          <button data-auto-panel="landing"><span>自动着陆</span><small>LANDING GUIDANCE</small></button>
+          <button data-auto-panel="smartass"><span>Smart A.S.S.</span><small>ATTITUDE CONTROL</small></button>
+          <button data-auto-panel="rendezvous"><span>自动交汇</span><small>RENDEZVOUS AUTOPILOT</small></button>
+          <button data-auto-panel="docking"><span>自动对接</span><small>DOCKING AUTOPILOT</small></button>
+        </div>
+        <div class="automation-global-options"><label class="check"><input id="autoWarpAutopilot" type="checkbox"><span></span>允许自动时间加速</label><small>与 MechJeb 节点执行器的 Auto-warp 共用同一状态</small></div>
+
+        <section class="auto-panel is-active" data-auto-view="ascent">
+          <div class="ascent-grid">
+            <section class="guidance-card ascent-target">
+              <header><h2>目标轨道</h2><span>ORBIT INSERTION</span></header>
+              <div class="ascent-orbit-mark"><svg id="ascentTargetOrbit" viewBox="0 0 400 160" role="img" aria-label="目标轨道示意"><g id="ascentTargetOrbitGeometry"><ellipse id="ascentTargetOrbitEllipse" class="ascent-target-orbit-line" cx="200" cy="78" rx="126" ry="63"/><line id="ascentTargetApsisAxis" class="ascent-apsis-axis" x1="200" y1="15" x2="200" y2="141"/><circle id="ascentTargetApMarker" class="ascent-apsis-marker" cx="200" cy="15" r="4"/><circle id="ascentTargetPeMarker" class="ascent-apsis-marker pe" cx="200" cy="141" r="3"/><text id="ascentTargetApLabel" class="ascent-apsis-label" x="209" y="18">AP 100</text><text id="ascentTargetPeLabel" class="ascent-apsis-label pe" x="209" y="145">PE 100</text></g><circle id="ascentTargetBody" class="ascent-target-body" cx="200" cy="146" r="48"/><circle class="ascent-target-focus" cx="200" cy="146" r="2"/></svg><b id="ascentOrbitBadge">100 km</b></div>
+              <div class="setup-grid ascent-target-inputs">
+                <label><span id="ascentOrbitAltitudeLabel">目标轨道高度</span><div class="unit-input"><input id="ascentOrbitAltitude" value="100" inputmode="decimal"><b>km</b></div></label>
+                <label class="pvg-target-only" hidden><span>目标远拱点 AP</span><div class="unit-input"><input id="pvgDesiredApoapsis" value="100" inputmode="decimal"><b>km</b></div></label>
+                <label><span>目标倾角</span><div class="unit-input"><input id="ascentInclination" value="0.0" inputmode="decimal"><b>°</b></div></label>
+                <label><span>目标升交点经度</span><div class="unit-input"><input id="ascentDesiredLan" value="0.0" inputmode="decimal"><b>°</b></div></label>
+                <label class="ascent-path-field"><span>上升制导器</span><select id="ascentPath"><option value="GRAVITYTURN">Gravity Turn</option><option value="PVG">Primer Vector Guidance</option><option value="CLASSIC">Classic Ascent</option></select></label>
+              </div>
+              <div class="launch-window-control">
+                <label><span>发射时机</span><select id="ascentLaunchMode"><option value="IMMEDIATE">立即发射</option><option value="COUNTDOWN">手动倒计时</option><option value="TARGET_PLANE">发射至目标轨道面</option><option value="TARGET_LAN">发射至目标 LAN（PVG）</option><option value="RENDEZVOUS">发射至交会</option></select></label>
+                <div class="launch-target-state" id="ascentLaunchTargetState"><span>轨道目标</span><b>未选择有效目标</b><small>请先在目标页面选择绕当前天体运行的目标</small></div>
+                <label class="target-launch-option" data-launch-option="TARGET_PLANE TARGET_LAN"><span>目标 LAN 偏移</span><div class="unit-input"><input id="ascentLaunchLanDifference" value="0" inputmode="decimal"><b>°</b></div></label>
+                <label class="target-launch-option" data-launch-option="RENDEZVOUS"><span>交会相位角</span><div class="unit-input"><input id="ascentLaunchPhaseAngle" value="0" inputmode="decimal"><b>°</b></div></label>
+              </div>
+            </section>
+
+            <section class="guidance-card ascent-limits">
+              <header><h2>制导约束</h2><span>MECHJEB 2.14.3</span></header>
+              <div class="option-list ascent-options">
+                <label class="check"><input id="ascentAutoThrottle" type="checkbox" checked><span></span>自动油门</label>
+                <label class="check"><input id="ascentCorrectiveSteering" type="checkbox" checked><span></span>修正转向</label>
+                <label class="check"><input id="ascentAutoStage" type="checkbox" checked><span></span>自动分级</label>
+                <label class="check"><input id="ascentSkipCircularization" type="checkbox"><span></span>跳过圆化</label>
+                <label class="check"><input id="ascentDeploySolar" type="checkbox"><span></span>自动展开太阳能板</label>
+                <label class="check"><input id="ascentDeployAntennas" type="checkbox"><span></span>自动展开天线</label>
+                <label><span>修正转向增益</span><div class="unit-input"><input id="ascentCorrectiveGain" value="0.6" inputmode="decimal"><b>×</b></div></label>
+                <label class="check"><input id="ascentLimitAoA" type="checkbox"><span></span>限制迎角</label>
+                <label><span>最大迎角</span><div class="unit-input"><input id="ascentMaxAoA" value="5.0" inputmode="decimal"><b>°</b></div></label>
+                <label><span>迎角限制淡出压力</span><div class="unit-input"><input id="ascentAoAFadePressure" value="2.5" inputmode="decimal"><b>kPa</b></div></label>
+                <label class="check"><input id="ascentLimitQ" type="checkbox"><span></span>限制动压</label>
+                <label><span>最大动压</span><div class="unit-input"><input id="ascentMaxQ" value="40" inputmode="decimal"><b>kPa</b></div></label>
+                <label class="check"><input id="ascentForceRoll" type="checkbox"><span></span>强制滚转</label>
+                <label><span>垂直 / 转向滚转</span><div class="dual-unit-input"><input id="ascentVerticalRoll" value="0" inputmode="decimal"><input id="ascentTurnRoll" value="0" inputmode="decimal"><b>°</b></div></label>
+                <label><span>滚转结束高度</span><div class="unit-input"><input id="ascentRollAltitude" value="0.5" inputmode="decimal"><b>km</b></div></label>
+              </div>
+            </section>
+
+            <section class="guidance-card ascent-readback">
+              <header><h2>发射剖面</h2><span id="ascentStateChip">STANDBY</span></header>
+              <dl class="ascent-live-orbit" aria-label="当前实际轨道参数">
+                <div><dt>当前 AP</dt><dd id="ascentActualAp">—</dd></div><div><dt>当前 PE</dt><dd id="ascentActualPe">—</dd></div>
+                <div><dt>当前倾角</dt><dd id="ascentActualInclination">—</dd></div><div><dt>轨道周期</dt><dd id="ascentActualPeriod">—</dd></div>
+                <div><dt>Time to AP</dt><dd id="ascentActualTimeAp">—</dd></div><div><dt>Time to PE</dt><dd id="ascentActualTimePe">—</dd></div>
+              </dl>
+              <dl class="ascent-readout">
+                <div><dt>状态</dt><dd id="ascentStatus">等待启动</dd></div>
+                <div><dt>目标</dt><dd id="ascentReadoutAltitude">100 km</dd></div>
+                <div><dt>倾角</dt><dd id="ascentReadoutInclination">0.0°</dd></div>
+                <div><dt>制导器</dt><dd id="ascentReadoutPath">GRAVITY TURN</dd></div>
+                <div><dt>发射窗口</dt><dd id="ascentReadoutLaunchMode">立即发射</dd></div>
+                <div><dt>倒计时</dt><dd id="ascentTMinus">立即发射</dd></div>
+              </dl>
+            </section>
+
+            <section class="guidance-card ascent-spatial-panel">
+              <header><h2>实际发射剖面</h2><span>ORBIT PLANE · TRUE SCALE</span></header>
+              <div class="ascent-spatial-chart"><svg id="ascentProfileChart" viewBox="0 0 760 390" role="img" aria-label="等比例天体曲率、实际航迹与当前无动力轨道"><text x="24" y="190" fill="#8ea8ad">等待真实空间坐标</text></svg></div>
+              <p class="ascent-spatial-legend">青色：本页观测的实际航迹 · 蓝色虚线：当前无动力预测 · 金色参考环：目标 AP / PE 高度（不是制导预测）</p>
+              <p class="ascent-spatial-note">当前轨道平面投影；不模拟后续推力或大气阻力。实际航迹从页面连接后记录，刷新或切换载具重新记录；目标轨道形状见上方目标轨道图。</p>
+            </section>
+
+            <section class="guidance-card ascent-path-settings">
+              <header><h2>上升路径参数</h2><span id="ascentPathSettingsLabel">GRAVITY TURN</span></header>
+              <div class="ascent-path-panel is-active" data-ascent-path="GRAVITYTURN">
+                <label><span>转弯开始高度</span><div class="unit-input"><input id="gtStartAltitude" value="0.5"><b>km</b></div></label>
+                <label><span>转弯开始速度</span><div class="unit-input"><input id="gtStartVelocity" value="100"><b>m/s</b></div></label>
+                <label><span>转弯开始俯仰</span><div class="unit-input"><input id="gtStartPitch" value="10"><b>°</b></div></label>
+                <label><span>中间高度</span><div class="unit-input"><input id="gtIntermediateAltitude" value="10"><b>km</b></div></label>
+                <label><span>保持 AP 时间</span><div class="unit-input"><input id="gtHoldApTime" value="40"><b>s</b></div></label>
+              </div>
+              <div class="ascent-path-panel" data-ascent-path="PVG">
+                <label><span>起始俯仰速度</span><div class="unit-input"><input id="pvgPitchStartVelocity" value="80"><b>m/s</b></div></label>
+                <label><span>俯仰速率</span><div class="unit-input"><input id="pvgPitchRate" value="0.5"><b>°/s</b></div></label>
+                <label class="check path-check"><input id="pvgAttachAltitudeEnabled" type="checkbox"><span></span>指定燃尽 / 插入高度</label>
+                <label><span>燃尽 / 轨道插入高度</span><div class="unit-input"><input id="pvgAttachAltitude" value="1"><b>km</b></div></label>
+                <label><span>动压触发值</span><div class="unit-input"><input id="pvgDynamicPressureTrigger" value="1"><b>kPa</b></div></label>
+                <label class="check path-check"><input id="pvgStagingTriggerEnabled" type="checkbox"><span></span>指定分级触发级</label>
+                <label><span>分级触发级</span><div class="unit-input"><input id="pvgStagingTrigger" value="0"><b>stage</b></div></label>
+                <label class="check path-check"><input id="pvgFixedCoast" type="checkbox"><span></span>固定滑行时间</label>
+                <label><span>固定滑行时长</span><div class="unit-input"><input id="pvgFixedCoastLength" value="0"><b>s</b></div></label>
+              </div>
+              <div class="ascent-path-panel" data-ascent-path="CLASSIC">
+                <label class="check path-check"><input id="classicAutoPath" type="checkbox"><span></span>自动生成路径</label>
+                <label><span>转弯开始高度</span><div class="unit-input"><input id="classicStartAltitude" value="0.5"><b>km</b></div></label>
+                <label><span>转弯开始速度</span><div class="unit-input"><input id="classicStartVelocity" value="100"><b>m/s</b></div></label>
+                <label><span>转弯结束高度</span><div class="unit-input"><input id="classicEndAltitude" value="45"><b>km</b></div></label>
+                <label><span>转弯结束角度</span><div class="unit-input"><input id="classicEndAngle" value="0"><b>°</b></div></label>
+                <label><span>转弯曲线指数</span><div class="unit-input"><input id="classicShapeExponent" value="0.5"><b>×</b></div></label>
+              </div>
+            </section>
+
+            <section class="auto-command-bar ascent-command-bar">
+              <label id="ascentCountdownField" hidden><span>发射倒计时</span><div class="unit-input"><input id="ascentCountdown" value="0" inputmode="numeric"><b>s</b></div></label>
+              <span class="command-spacer"></span>
+              <button class="soft-button danger-button" data-command="mechjeb.ascent.stop">中止自动发射</button>
+              <button class="primary-action" id="startAscent">启动自动发射</button>
+            </section>
+
+            <section class="guidance-card ascent-stage-panel">
+              <header><h2>手动启动分级</h2><span>KSP STAGING</span></header>
+              <p class="ascent-stage-copy">独立于 MechJeb 自动分级设置，触发 KSP 当前的下一级。单击后将滑块拖到最右端确认。</p>
+              <div class="stage-confirm">
+                <button class="hold-stage confirm-trigger" id="ascentStageTrigger" aria-expanded="false">
+                  <span class="hold-copy"><b>执行分级</b><small>单击后滑动确认</small></span>
+                </button>
+                <div class="slide-confirm" id="ascentStageSlideConfirm" hidden>
+                  <div><b>滑动执行当前分级</b><button type="button" data-slide-cancel aria-label="取消自动发射页面分级确认">取消</button></div>
+                  <label><span>拖到最右端</span><output>0%</output></label>
+                  <input type="range" min="0" max="100" step="1" value="0" aria-label="滑动执行自动发射页面分级">
+                </div>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section class="auto-panel" data-auto-view="landing">
+          <div class="landing-grid">
+            <section class="guidance-card landing-target">
+              <header><h2>着陆目标</h2><span id="landingTargetBody">未设置</span></header>
+              <div class="target-coordinates"><label><span>纬度</span><input id="landingLatitude" value="0.0000°" inputmode="decimal"></label><label><span>经度</span><input id="landingLongitude" value="0.0000°" inputmode="decimal"></label></div>
+              <div class="landing-site"><span class="target-reticle">⌖</span><p><b id="landingTargetName">尚无地面目标</b><small id="landingTargetCoordinates">输入坐标后应用</small></p></div>
+              <button class="soft-button" id="setLandingTarget">应用坐标为目标</button>
+            </section>
+            <section class="guidance-card landing-options">
+              <header><h2>着陆设置</h2><span>GUIDANCE</span></header>
+              <div class="option-list"><label class="check"><input id="landingDeployGears" type="checkbox" checked><span></span>展开着陆架</label><label><span>着陆架最低级数</span><div class="unit-input"><input id="landingGearStageLimit" value="0" inputmode="numeric"><b>stage</b></div></label><label class="check"><input id="landingDeployChutes" type="checkbox"><span></span>展开降落伞</label><label><span>降落伞最低级数</span><div class="unit-input"><input id="landingChuteStageLimit" value="0" inputmode="numeric"><b>stage</b></div></label><label class="check"><input id="landingRcsAdjustment" type="checkbox" checked><span></span>使用 RCS 微调</label><label><span>接地速度</span><div class="unit-input"><input id="touchdownSpeed" value="0.5" inputmode="decimal"><b>m/s</b></div></label></div>
+            </section>
+            <section class="guidance-card landing-prediction">
+              <header><h2>着陆预测</h2><span>SIMULATION</span></header>
+              <div class="prediction-values"><div><span>预测结果</span><b id="landingPredictionState">等待数据</b></div><div><span>自动驾驶步骤</span><b id="landingAutopilotStep">N/A</b></div><div><span>下降模式</span><b id="landingDescentMode">N/A</b></div><div><span>预计着陆时间</span><b id="landingTimeToLand">—</b></div><div><span>预测位置</span><b id="landingPredictedCoordinates">—</b></div><div><span>预测着陆高度 ASL</span><b id="landingPredictedAltitude">—</b></div><div><span>距目标偏差</span><b id="landingTargetDifference">—</b></div><div><span>最大阻力</span><b id="landingMaxDrag">—</b></div><div><span>所需 Δv</span><b id="landingDeltaVNeeded">—</b></div><div><span>气动刹车后轨道</span><b id="landingAerobrakeOrbit">—</b></div></div>
+              <div class="option-list landing-prediction-options"><label class="check"><input id="landingPredictionsEnabled" type="checkbox"><span></span>显示着陆预测</label><label class="check"><input id="landingAerobrakeNodes" type="checkbox"><span></span>显示气动刹车节点</label><label class="check"><input id="landingShowTrajectory" type="checkbox"><span></span>显示轨迹</label><label class="check"><input id="landingWorldTrajectory" type="checkbox"><span></span>世界坐标轨迹</label><label class="check"><input id="landingCameraTrajectory" type="checkbox"><span></span>相机坐标轨迹（WIP）</label></div>
+              <p class="guidance-status"><i></i><span><b id="landingAutopilotStatus">等待启动</b><small id="landingPredictionDetail">等待 MJ 着陆预测</small></span></p>
+            </section>
+            <section class="auto-command-bar"><button class="soft-button" data-command="mechjeb.landing.stop">停止着陆</button><button class="soft-button" id="landUntargeted">降落在任意点</button><button class="primary-action" id="landAtTarget">降落在目标点</button></section>
+          </div>
+        </section>
+
+        <section class="auto-panel" data-auto-view="smartass">
+          <div class="smartass-layout">
+            <section class="guidance-card smartass-controls">
+              <header><h2>Smart A.S.S.</h2><span>AUTO-DISABLE ON</span></header>
+              <div class="reference-tabs"><button class="is-active">轨道</button><button>地面</button><button>目标</button></div>
+              <div class="attitude-grid">
+                <button class="attitude-off">关闭</button><button>姿态稳定</button><button>节点</button><button>地面</button>
+                <button class="is-active">顺向</button><button>逆向</button><button>法向 +</button><button>法向 −</button>
+                <button>径向外</button><button>径向内</button><button>相对速度 +</button><button>相对速度 −</button>
+                <button>目标 +</button><button>目标 −</button><button>正轨道平面</button><button>反轨道平面</button>
+                <button>地速 +</button><button>地速 −</button><button>水平速度 +</button><button>水平速度 −</button><button>上</button>
+              </div>
+              <label class="check smartass-disable"><input type="checkbox" checked><span></span>切换其他自动驾驶时自动关闭 Smart A.S.S.</label>
+            </section>
+            <section class="guidance-card attitude-readback">
+              <header><h2>姿态回读</h2><span>SURFACE REF</span></header>
+              <div class="mini-attitude"><canvas class="navball-canvas" id="smartNavball" aria-label="Smart A.S.S. 航天姿态球"></canvas><span class="smart-reticle">⌄</span></div>
+              <div class="attitude-values"><div><span>Pitch</span><b id="smartPitch">—</b></div><div><span>Heading</span><b id="smartHeading">—</b></div><div><span>Roll</span><b id="smartRoll">—</b></div></div>
+              <div class="attitude-offset">
+                <label><span>Pitch 偏移</span><div class="smart-offset-control"><button type="button" data-smart-offset-delta="-1" aria-label="减小 Pitch 偏移">−</button><input id="smartPitchOffset" value="0.0°" inputmode="decimal"><button type="button" data-smart-offset-delta="1" aria-label="增加 Pitch 偏移">+</button></div></label>
+                <label><span>Yaw 偏移</span><div class="smart-offset-control"><button type="button" data-smart-offset-delta="-1" aria-label="减小 Yaw 偏移">−</button><input id="smartYawOffset" value="0.0°" inputmode="decimal"><button type="button" data-smart-offset-delta="1" aria-label="增加 Yaw 偏移">+</button></div></label>
+                <label><span>Roll 偏移</span><div class="smart-offset-control"><button type="button" data-smart-offset-delta="-1" aria-label="减小 Roll 偏移">−</button><input id="smartRollOffset" value="0.0°" inputmode="decimal"><button type="button" data-smart-offset-delta="1" aria-label="增加 Roll 偏移">+</button></div></label>
+              </div>
+              <div class="smart-offset-step"><span>调整刻度</span><div role="group" aria-label="姿态偏移调整刻度"><button type="button" class="is-active" data-smart-step="1" aria-pressed="true">1°</button><button type="button" data-smart-step="5" aria-pressed="false">5°</button><button type="button" data-smart-step="10" aria-pressed="false">10°</button></div></div>
+              <button class="primary-action" id="executeSmartAss">执行姿态</button>
+            </section>
+          </div>
+        </section>
+
+        <section class="auto-panel" data-auto-view="rendezvous">
+          <div class="rendezvous-layout">
+            <section class="guidance-card rendezvous-target-card">
+              <header><h2>交汇目标</h2><span id="rendezvousReadiness">NO TARGET</span></header>
+              <div class="rendezvous-radar" aria-hidden="true"><i></i><i></i><span>◆</span><b>+</b></div>
+              <div class="dock-target-info"><p><span>当前 KSP 目标</span><b id="rendezvousTargetName">未选择</b></p><p><span>目标距离</span><b id="rendezvousTargetDistance">—</b></p><p><span>相对速度</span><b id="rendezvousRelativeSpeed">—</b></p></div>
+            </section>
+            <section class="guidance-card rendezvous-controls">
+              <header><h2>自动交汇</h2><span>MECHJEB 2.14.3</span></header>
+              <div class="setup-grid rendezvous-settings">
+                <label><span>最终交汇距离</span><div class="unit-input"><input id="rendezvousDistance" value="100"><b>m</b></div></label>
+                <label><span>最大相位轨道数</span><div class="unit-input"><input id="rendezvousPhasingOrbits" value="5"><b>orbit</b></div></label>
+                <label><span>最大接近速度</span><div class="unit-input"><input id="rendezvousClosingSpeed" value="10"><b>m/s</b></div></label>
+              </div>
+              <p class="guidance-status"><i></i><span><b id="rendezvousStatus">等待启动</b><small>需要同一主天体下的轨道目标</small></span></p>
+              <div class="auto-command-bar"><button class="soft-button" data-command="mechjeb.rendezvous.stop">停止自动交汇</button><button class="primary-action" id="startRendezvous">启动自动交汇</button></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="auto-panel" data-auto-view="docking">
+          <div class="docking-layout">
+            <section class="guidance-card docking-visual">
+              <header><h2>对接轴</h2><span>RELATIVE FRAME</span></header>
+              <div class="dock-reticle"><i class="dock-ring r1"></i><i class="dock-ring r2"></i><span class="dock-target">+</span><span class="dock-craft" id="dockCraftMarker" hidden>◆</span><b id="dockReticleError">等待有效对接口目标</b></div>
+              <div class="dock-errors"><div><span>目标轴偏差 X</span><b id="dockErrorX">—</b></div><div><span>目标轴偏差 Y</span><b id="dockErrorY">—</b></div><div><span>轴向距离</span><b id="dockAxialDistance">—</b></div><div><span>横向合量</span><b id="dockLateralDistance">—</b></div></div>
+            </section>
+            <section class="guidance-card docking-controls">
+              <header><h2>自动对接</h2><span id="dockingReadiness">WAITING</span></header>
+              <div class="dock-target-info"><p><span>当前目标</span><b id="dockingTargetName">未选择</b></p><p><span>控制来源</span><b>当前 KSP Control From Here</b></p></div>
+              <div class="setup-grid docking-settings"><label><span>速度限制</span><div class="unit-input"><input id="dockingSpeedLimit" value="1.0" inputmode="decimal"><b>m/s</b></div></label><label><span>安全距离覆盖值</span><div class="unit-input"><input id="dockingSafeDistance" value="5.0" inputmode="decimal" disabled><b>m</b></div></label><label><span>起始距离覆盖值</span><div class="unit-input"><input id="dockingStartDistance" value="7.6" inputmode="decimal" disabled><b>m</b></div></label><label><span>目标滚转角</span><div class="unit-input"><input id="dockingRoll" value="0.0" inputmode="decimal" disabled><b>°</b></div></label></div>
+              <div class="option-list dock-options"><label class="check"><input id="dockingOverrideSafeDistance" type="checkbox"><span></span>覆盖安全距离</label><label class="check"><input id="dockingOverrideStartDistance" type="checkbox"><span></span>覆盖起始距离</label><label class="check"><input id="dockingForceRoll" type="checkbox"><span></span>强制保持滚转</label><label class="check"><input id="dockingDrawBoundingBox" type="checkbox"><span></span>绘制飞船边界框</label></div>
+              <p class="guidance-status"><i></i><span><b>前置条件已满足</b><small>目标和控制对接口均有效</small></span></p>
+              <div class="auto-command-bar"><button class="soft-button" data-command="mechjeb.docking.stop">停止自动对接</button><button class="primary-action" id="startDocking">启动自动对接</button></div>
+            </section>
+          </div>
+        </section>
+      </section>
+
+      <section class="view envelope-view" id="view-envelope" aria-labelledby="envelope-title">
+        <div class="view-heading">
+          <div><span class="eyebrow">MECHJEB 2.14.3 / THRUST CONTROLLER</span><h1 id="envelope-title">飞行包线</h1></div>
+          <div class="envelope-state"><i></i><span><b id="envelopeState">等待飞行数据</b><small id="envelopeLimiterState">MJ 推力控制器</small></span></div>
+        </div>
+
+        <section class="envelope-monitor panel-cut" aria-label="当前包线裕度">
+          <div class="envelope-axis">
+            <header><span>当前动压</span><b id="envelopeCurrentQ">—</b><em id="envelopeQLimitReadout">限制 —</em></header>
+            <div class="envelope-scale"><i id="envelopeQBar"></i><span></span></div>
+          </div>
+          <div class="envelope-axis">
+            <header><span>当前加速度</span><b id="envelopeCurrentAcceleration">—</b><em id="envelopeAccelerationLimitReadout">限制 —</em></header>
+            <div class="envelope-scale acceleration"><i id="envelopeAccelerationBar"></i><span></span></div>
+          </div>
+          <div class="envelope-axis">
+            <header><span>当前油门</span><b id="envelopeCurrentThrottle">—</b><em id="envelopeThrottleBandReadout">允许 —</em></header>
+            <div class="envelope-scale throttle-band"><i id="envelopeThrottleBar"></i><span id="envelopeThrottleFloor"></span></div>
+          </div>
+          <div class="envelope-verdict"><span>当前首要约束</span><strong id="envelopePrimaryConstraint">无活动限制</strong><small>限制器由 MechJeb ThrustController 按内部优先级共同求解</small></div>
+        </section>
+
+        <div class="envelope-layout">
+          <section class="envelope-limits">
+            <header><span class="eyebrow">HARD LIMITS</span><h2>推力边界</h2></header>
+            <div class="limit-row"><label class="check"><input id="envelopeLimitQ" type="checkbox"><span></span>最大动压</label><div class="unit-input"><input id="envelopeMaximumQ" value="40" inputmode="decimal"><b>kPa</b></div><small>按气动压力主动收油</small></div>
+            <div class="limit-row"><label class="check"><input id="envelopeLimitAcceleration" type="checkbox"><span></span>最大加速度</label><div class="unit-input"><input id="envelopeMaximumAcceleration" value="30" inputmode="decimal"><b>m/s²</b></div><small id="envelopeAccelerationG">约 3.06 g</small></div>
+            <div class="limit-row"><label class="check"><input id="envelopeLimitMaximumThrottle" type="checkbox"><span></span>最大油门</label><div class="unit-input"><input id="envelopeMaximumThrottle" value="100" inputmode="decimal"><b>%</b></div><small>限制自动油门上界</small></div>
+            <div class="limit-row"><label class="check"><input id="envelopeLimitMinimumThrottle" type="checkbox"><span></span>最小油门</label><div class="unit-input"><input id="envelopeMinimumThrottle" value="0" inputmode="decimal"><b>%</b></div><small>适用于不可深度节流发动机</small></div>
+          </section>
+
+          <section class="envelope-protection">
+            <header><span class="eyebrow">ENGINE PROTECTION</span><h2>发动机保护</h2></header>
+            <div class="protection-grid">
+              <label class="protection-switch"><input id="envelopePreventOverheat" type="checkbox"><span><b>防止发动机过热</b><small>接近热极限时降低推力</small></span><i></i></label>
+              <label class="protection-switch"><input id="envelopeTerminalVelocity" type="checkbox"><span><b>限制到终端速度</b><small>减少稠密大气中的阻力损失</small></span><i></i></label>
+              <label class="protection-switch"><input id="envelopePreventFlameout" type="checkbox"><span><b>防止熄火</b><small>按可用进气资源预留裕度</small></span><i></i></label>
+              <label class="protection-switch"><input id="envelopePreventUnstableIgnition" type="checkbox"><span><b>防止不稳定点火</b><small>兼容有限点火与沉底需求</small></span><i></i></label>
+              <label class="protection-switch"><input id="envelopeAutoRcsUllage" type="checkbox"><span><b>自动 RCS 沉底</b><small>点火前用 RCS 建立正加速度</small></span><i></i></label>
+              <label class="protection-switch"><input id="envelopeManageIntakes" type="checkbox"><span><b>自动管理进气口</b><small>配合防熄火限制</small></span><i></i></label>
+              <label class="protection-switch"><input id="envelopeDifferentialThrottle" type="checkbox"><span><b>差动油门</b><small>允许 MJ 用发动机推力辅助姿态</small></span><i></i></label>
+              <label class="protection-switch"><input id="envelopeAutoStage" type="checkbox"><span><b>自动分级</b><small>使用 MJ Staging Controller</small></span><i></i></label>
+            </div>
+            <div class="envelope-inline-settings">
+              <label><span>熄火安全裕度</span><div class="unit-input"><input id="envelopeFlameoutMargin" value="5" inputmode="decimal"><b>%</b></div></label>
+              <label class="smooth-setting"><span><label class="check"><input id="envelopeSmoothThrottle" type="checkbox"><span></span>平滑油门</label></span><div class="unit-input"><input id="envelopeSmoothingTime" value="1" inputmode="decimal"><b>s</b></div></label>
+            </div>
+          </section>
+        </div>
+        <div class="envelope-actions"><p>此页面直接修改 MJ 推力控制器。多个限制同时启用时，最终油门取最严格结果。</p><button class="primary-action" id="applyEnvelope">应用飞行包线</button></div>
+      </section>
+
+      <section class="view trajectory-view" id="view-trajectory" aria-labelledby="trajectory-title">
+        <div class="view-heading">
+          <div><span class="eyebrow">TRAJECTORIES 2.4.5.4 / ATMOSPHERIC PREDICTION</span><h1 id="trajectory-title">轨迹预测</h1></div>
+          <div class="trajectory-state"><i></i><span><b id="trajectoryState">等待 Trajectories</b><small id="trajectoryModel">气动模型 —</small></span></div>
+        </div>
+
+            <dl class="trajectory-summary" aria-label="关键预测读数">
+              <div><dt>预计撞击时间</dt><dd id="trajectoryTimeToImpact">—</dd></div>
+              <div><dt>目标坐标</dt><dd id="trajectoryMapTarget">—</dd></div>
+              <div><dt>落点距目标</dt><dd id="trajectoryMissDistance">—</dd></div>
+              <div><dt>落点坐标</dt><dd id="trajectoryImpactCoordinates">—</dd></div>
+              <div><dt>撞击速度</dt><dd id="trajectoryImpactSpeed">—</dd></div>
+              <div><dt>向下 / 水平（地表相对）</dt><dd id="trajectoryImpactComponents">—</dd></div>
+            </dl>
+        <div class="trajectory-layout">
+          <section class="impact-console panel-cut">
+            <header><span class="eyebrow">PREDICTED IMPACT</span><b id="trajectoryImpactStatus">NO SOLUTION</b></header>
+            <div class="impact-plot" aria-label="北向上目标与预测落点地图">
+              <svg id="trajectoryOrbitChart" viewBox="0 0 760 390" role="img" aria-label="北向上：目标、预测落点和地面轨迹"></svg>
+              <span class="impact-target" id="trajectoryTargetMarker">TARGET</span>
+              <span class="impact-point" id="trajectoryImpactMarker">IMPACT</span>
+            </div>
+            <p id="trajectoryPathStatus" class="trajectory-map-note" role="status">等待轨迹数据</p>
+            <p class="trajectory-map-note">北向上 · 金色十字：目标 · 红色圆点：落点 · 青色：预测地面轨迹。以目标为中心的等距方位投影，比例尺为中心附近距离；跨大范围时存在投影变形。计入天体自转，不改变游戏显示开关。</p>
+
+          </section>
+          <aside class="trajectory-settings" aria-label="轨迹设置">
+          <section class="trajectory-target">
+            <header><span class="eyebrow">SURFACE TARGET</span><h2>预测目标</h2><small id="trajectoryTargetReadout">未设置目标</small></header>
+            <div class="trajectory-coordinate-grid"><label><span>纬度</span><div class="unit-input"><input id="trajectoryTargetLatitude" value="0" inputmode="decimal"><b>°</b></div></label><label><span>经度</span><div class="unit-input"><input id="trajectoryTargetLongitude" value="0" inputmode="decimal"><b>°</b></div></label><label><span>高度</span><div class="unit-input"><input id="trajectoryTargetAltitude" value="0" inputmode="decimal"><b>m</b></div></label></div>
+            <div class="trajectory-target-actions"><button class="danger-button" id="clearTrajectoryTarget">清除目标</button><button class="primary-action" id="setTrajectoryTarget">设置目标</button></div>
+          </section>
+          <section class="trajectory-profile">
+            <header><span class="eyebrow">DESCENT PROFILE</span><h2>下降姿态假设</h2><small>角度模式用于固定 AoA；地平线和逆行模式由 Trajectories 动态求姿态。</small></header>
+            <div class="profile-table">
+              <div class="profile-head"><span>区段</span><span>角度参考</span><span>速度方向</span><span>角度</span></div>
+              <div class="profile-row"><b>大气入口</b><select id="trajectoryEntryMode"><option value="VELOCITY">相对速度</option><option value="HORIZON">相对地平线</option></select><select id="trajectoryEntryGrade"><option value="PROGRADE">顺行</option><option value="RETROGRADE">逆行</option></select><div class="unit-input"><input id="trajectoryEntryAngle" value="0" inputmode="decimal"><b>°</b></div></div>
+              <div class="profile-row"><b>高空下降</b><select id="trajectoryHighMode"><option value="VELOCITY">相对速度</option><option value="HORIZON">相对地平线</option></select><select id="trajectoryHighGrade"><option value="PROGRADE">顺行</option><option value="RETROGRADE">逆行</option></select><div class="unit-input"><input id="trajectoryHighAngle" value="0" inputmode="decimal"><b>°</b></div></div>
+              <div class="profile-row"><b>低空下降</b><select id="trajectoryLowMode"><option value="VELOCITY">相对速度</option><option value="HORIZON">相对地平线</option></select><select id="trajectoryLowGrade"><option value="PROGRADE">顺行</option><option value="RETROGRADE">逆行</option></select><div class="unit-input"><input id="trajectoryLowAngle" value="0" inputmode="decimal"><b>°</b></div></div>
+              <div class="profile-row"><b>最终进近</b><select id="trajectoryFinalMode"><option value="VELOCITY">相对速度</option><option value="HORIZON">相对地平线</option></select><select id="trajectoryFinalGrade"><option value="PROGRADE">顺行</option><option value="RETROGRADE">逆行</option></select><div class="unit-input"><input id="trajectoryFinalAngle" value="0" inputmode="decimal"><b>°</b></div></div>
+            </div>
+            <button class="soft-button" id="applyTrajectoryProfile">应用下降姿态</button>
+          </section>
+          <section class="trajectory-display-controls">
+            <header><span class="eyebrow">DISPLAY & REFERENCE</span><h2>显示方式</h2></header>
+            <div class="trajectory-switches">
+              <label class="protection-switch"><input id="trajectoryDisplay" type="checkbox"><span><b>显示预测轨迹</b><small>控制地图视图轨迹线</small></span><i></i></label>
+              <label class="protection-switch"><input id="trajectoryDisplayInFlight" type="checkbox"><span><b>飞行视图显示</b><small>在外部飞行相机中绘制轨迹</small></span><i></i></label>
+              <label class="protection-switch"><input id="trajectoryBodyFixed" type="checkbox"><span><b>天体固定坐标</b><small>计入天体自转后的地面路径</small></span><i></i></label>
+              <label class="protection-switch"><input id="trajectoryComplete" type="checkbox"><span><b>完整轨迹</b><small>显示全部预测 Patch</small></span><i></i></label>
+              <label class="protection-switch"><input id="trajectoryAlwaysUpdate" type="checkbox"><span><b>持续更新轨迹</b><small>非地图视图也保持计算</small></span><i></i></label>
+              <label class="protection-switch"><input id="trajectoryAutoAero" type="checkbox"><span><b>自动更新气动模型</b><small>分级或构型变化后重建模型</small></span><i></i></label>
+            </div>
+          </section>
+          <section class="trajectory-quality">
+            <header><span class="eyebrow">COMPUTATION BUDGET</span><h2>计算精度</h2></header>
+            <label class="check"><input id="trajectoryUseCache" type="checkbox"><span></span>使用气动缓存</label>
+            <label class="check"><input id="trajectoryDefaultRetrograde" type="checkbox"><span></span>新载具默认逆行下降</label>
+            <div class="trajectory-quality-grid"><label><span>积分步长</span><div class="unit-input"><input id="trajectoryIntegrationStep" value="2" inputmode="decimal"><b>s</b></div></label><label><span>最大 Patch</span><input id="trajectoryMaxPatches" value="4" inputmode="numeric"></label><label><span>每 Patch 最大帧</span><input id="trajectoryMaxFrames" value="15" inputmode="numeric"></label></div>
+            <div class="trajectory-quality-actions"><button class="soft-button" id="applyTrajectorySettings">应用计算参数</button><button class="primary-action" id="updateTrajectoryNow">立即重新计算</button></div>
+          <dl class="trajectory-diagnostics"><div><dt>最大减速</dt><dd id="trajectoryMaximumG">—</dd></div><div><dt>计算耗时</dt><dd id="trajectoryComputationTime">—</dd></div><div><dt>计算错误</dt><dd id="trajectoryErrors">—</dd></div></dl>
+          </section>
+          </aside>
+        </div>
+      </section>
+
+      <section class="view crew-view" id="view-crew" aria-labelledby="crew-title">
+        <div class="view-heading">
+          <div><span class="eyebrow">ACTIVE VESSEL / CREW MANIFEST</span><h1 id="crew-title">本载具成员</h1></div>
+          <div class="crew-total"><b id="crewTotal">04</b><span>在舰成员<small id="crewCapacity">容量 7 人</small></span></div>
+        </div>
+
+        <section class="crew-summary" aria-label="成员概况">
+          <div><span>飞行员</span><b id="crewPilots">2</b><small>PILOT</small></div>
+          <div><span>工程师</span><b id="crewEngineers">1</b><small>ENGINEER</small></div>
+          <div><span>科学家</span><b id="crewScientists">1</b><small>SCIENTIST</small></div>
+          <div><span>已占用座位</span><b id="crewOccupied">4 / 7</b><small>OCCUPIED SEATS</small></div>
+        </section>
+
+        <div class="crew-layout vessel-only">
+          <aside class="crew-vessel-card" aria-label="当前载具乘员分布">
+            <header><span id="crewVesselName">嫦娥-吴刚</span><small>ACTIVE VESSEL</small></header>
+            <div class="crew-orbit"><span class="pulse-dot"></span><p><b>当前活动载具</b><small>本页仅显示该载具实际在舰成员</small></p></div>
+            <div id="crewCabins"><div class="cabin-count"><span>指令舱</span><b>2</b></div><div class="cabin-count"><span>居住舱</span><b>1</b></div><div class="cabin-count"><span>实验舱</span><b>1</b></div></div>
+            <footer><span>总计</span><b id="crewVesselTotal">4 / 7</b></footer>
+          </aside>
+
+          <section class="crew-manifest" id="crewManifest">
+            <header class="manifest-head"><span>宇航员</span><span>职业</span><span>舱内位置</span><span>状态</span><span>操作</span></header>
+            <article class="crew-row" data-crew-place="active"><div class="crew-identity"><span class="crew-avatar pilot">JK</span><p><b>Jebediah Kerman</b><small>等级 5 · 12 次任务</small></p></div><span class="role-badge pilot">飞行员</span><div class="crew-place"><b>嫦娥-吴刚</b><small>指令舱 · Seat 01</small></div><span class="crew-status on-duty"><i></i>执勤中</span></article>
+            <article class="crew-row" data-crew-place="active"><div class="crew-identity"><span class="crew-avatar pilot">VK</span><p><b>Valentina Kerman</b><small>等级 5 · 10 次任务</small></p></div><span class="role-badge pilot">飞行员</span><div class="crew-place"><b>嫦娥-吴刚</b><small>指令舱 · Seat 02</small></div><span class="crew-status on-duty"><i></i>执勤中</span></article>
+            <article class="crew-row" data-crew-place="active"><div class="crew-identity"><span class="crew-avatar engineer">BK</span><p><b>Bill Kerman</b><small>等级 5 · 11 次任务</small></p></div><span class="role-badge engineer">工程师</span><div class="crew-place"><b>嫦娥-吴刚</b><small>居住舱 · Seat 01</small></div><span class="crew-status on-duty"><i></i>执勤中</span></article>
+            <article class="crew-row" data-crew-place="active"><div class="crew-identity"><span class="crew-avatar scientist">BK</span><p><b>Bob Kerman</b><small>等级 5 · 9 次任务</small></p></div><span class="role-badge scientist">科学家</span><div class="crew-place"><b>嫦娥-吴刚</b><small>实验舱 · Seat 01</small></div><span class="crew-status on-duty"><i></i>执勤中</span></article>
+          </section>
+        </div>
+      </section>
+
+      <section class="view" id="view-control" aria-labelledby="control-title">
+        <div class="view-heading">
+          <div><span class="eyebrow">REMOTE COMMAND / GLOBAL FIFO</span><h1 id="control-title">基础控制</h1></div>
+          <div class="lease-pill"><span></span><div><b>全局 FIFO 控制队列</b><small>多设备按到达顺序执行</small></div></div>
+        </div>
+        <div class="control-grid">
+          <section class="switch-bank panel-cut">
+            <header><span class="eyebrow">VESSEL SYSTEMS</span><h2>载具系统</h2></header>
+            <div class="big-switches">
+              <button class="system-switch is-on"><span class="switch-icon">SAS</span><span><b>姿态稳定</b><small>稳定辅助</small></span><i></i></button>
+              <button class="system-switch is-on"><span class="switch-icon">RCS</span><span><b>反作用控制</b><small>启用</small></span><i></i></button>
+              <button class="system-switch"><span class="switch-icon">GR</span><span><b>起落架</b><small>已收起</small></span><i></i></button>
+              <button class="system-switch"><span class="switch-icon">BRK</span><span><b>刹车</b><small>释放</small></span><i></i></button>
+              <button class="system-switch is-on"><span class="switch-icon">LGT</span><span><b>灯光</b><small>已开启</small></span><i></i></button>
+              <button class="system-switch is-on"><span class="switch-icon">SOL</span><span><b>太阳能板</b><small>全部展开</small></span><i></i></button>
+              <button class="system-switch is-on"><span class="switch-icon">ANT</span><span><b>天线</b><small>RemoteTech 在线</small></span><i></i></button>
+              <button class="system-switch is-on warning-switch"><span class="switch-icon">AUTO</span><span><b>自动分级</b><small>MechJeb 管理</small></span><i></i></button>
+            </div>
+          </section>
+          <section class="action-bank">
+            <header><span class="eyebrow">ACTION GROUPS</span><h2>动作组</h2></header>
+            <div class="action-pad"><button><b>01</b></button><button><b>02</b></button><button class="is-on"><b>03</b></button><button><b>04</b></button><button><b>05</b></button><button><b>06</b></button><button><b>07</b></button><button><b>08</b></button><button><b>09</b></button><button><b>10</b></button></div>
+            <div class="axis-preview"><header><div><span class="eyebrow">CONTINUOUS CONTROL</span><h3>连续控制轴</h3></div><button class="pending-badge" id="releaseControl">已解除</button></header><p>姿态轴像键盘输入一样叠加到现有飞控，不会停止 MechJeb 任务；自动发射、节点执行或自动着陆期间，网页油门会锁定并交由 MechJeb 独占。</p><div class="axis-layout"><div class="joystick" id="controlJoystick"><i id="controlStick"></i><span>PITCH / YAW</span></div><div class="roll-control" id="controlRoll"><i><em id="controlRollKnob"></em></i><span>ROLL <b id="controlRollValue">0%</b></span></div><div class="throttle" id="controlThrottle" aria-disabled="false"><i><em id="controlThrottleFill" style="height:0%"></em></i><span>THROTTLE <b id="controlThrottleValue">0%</b></span></div></div></div>
+          </section>
+          <section class="stage-panel">
+            <div><span class="eyebrow">KSP STAGING</span><h2>触发当前下一级</h2><p>执行效果完全由 KSP 当前分级栈决定。</p></div>
+            <div class="stage-confirm"><button class="hold-stage confirm-trigger" id="holdStage" aria-expanded="false"><span class="hold-copy"><b>执行分级</b><small>单击后滑动确认</small></span></button><div class="slide-confirm" id="stageSlideConfirm" hidden><div><b>滑动执行分级</b><button type="button" data-slide-cancel aria-label="取消分级确认">取消</button></div><label><span>拖到最右端</span><output>0%</output></label><input type="range" min="0" max="100" step="1" value="0" aria-label="滑动执行分级"></div></div>
+          </section>
+          <section class="stage-panel quickload-panel">
+            <div><span class="eyebrow">KSP SAVE STATE</span><h2>直接加载 quicksave</h2><p>加载当前存档目录中的 quicksave.sfs；当前未保存的飞行进度将被丢弃。</p></div>
+            <div class="stage-confirm"><button class="hold-stage hold-quickload confirm-trigger" id="holdQuickload" aria-expanded="false" disabled><span class="hold-copy"><b>加载 quicksave</b><small>单击后滑动确认</small></span></button><div class="slide-confirm" id="quickloadSlideConfirm" hidden><div><b>滑动加载 quicksave</b><button type="button" data-slide-cancel aria-label="取消 quicksave 确认">取消</button></div><label><span>未保存进度将丢失</span><output>0%</output></label><input type="range" min="0" max="100" step="1" value="0" aria-label="滑动加载 quicksave"></div></div>
+          </section>
+        </div>
+      </section>
+    </main>
+  </div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="i18n.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+# Build outputs; never distribute KSP or third-party assemblies.
+Plugins/
+**/bin/
+**/obj/
+BuildArtifacts/
+ReviewBuild/
+*.user
+*.suo
+.vs/
+.DS_Store
+Thumbs.db
+
+# Machine-specific server configuration may contain an access token.
+settings.cfg
+*.log

@@ -1,0 +1,15 @@
+.language-control { flex: 0 0 auto; }
+.language-control select { min-height:44px; max-width:112px; padding:6px 8px; color:var(--cyan); background:#0b252c; border:1px solid var(--line); font:inherit; cursor:pointer; }
+.language-control select:focus-visible { outline:2px solid var(--cyan); outline-offset:2px; }
+#languageStatus:empty { display:none; }
+#languageStatus { position:absolute; right:12px; top:100%; max-width:300px; padding:10px; background:#0b252c; color:var(--coral); }
+html[lang="en-US"] .nav-item span { font-size:10px; letter-spacing:0; }
+html[lang="en-US"] .fp-row>span, html[lang="en-US"] .data-cell>span { overflow-wrap:anywhere; }
+@media(max-width:700px) {
+  .connection-pill { gap:6px; }
+  .language-control select { max-width:86px; font-size:11px; padding:4px; }
+  .connection-pill .topbar-system { display:none; }
+  .vessel-id { min-width:0; }
+  .vessel-select { max-width:100%; overflow:hidden; }
+  #activeVesselName { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+}
