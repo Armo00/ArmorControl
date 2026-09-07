@@ -2,7 +2,7 @@
   <PropertyGroup>
     <TargetFramework>net461</TargetFramework>
     <AssemblyName>ArmorControl</AssemblyName>
-    <Version>0.1.0</Version>
+    <Version>0.1</Version>
     <RootNamespace>ArmorOverhaul.ArmorControl</RootNamespace>
     <ImplicitUsings>disable</ImplicitUsings>
     <Nullable>disable</Nullable>
