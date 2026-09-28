@@ -1722,6 +1722,9 @@ namespace ArmorOverhaul.ArmorControl
                     if (warpExecutor == null) return CommandFailure("node_executor_unavailable", "MechJeb node executor is unavailable.");
                     warpExecutor.autowarp = WireProtocol.ReadBool(message.RawJson, "enabled", warpExecutor.autowarp);
                     return CommandSuccess("MechJeb automatic time warp " + (warpExecutor.autowarp ? "enabled." : "disabled."));
+                case "mechjeb.ascent.setting":
+                    string settingError = AscentSettingBridge.Set(core, WireProtocol.ReadString(message.RawJson, "field"), WireProtocol.ReadString(message.RawJson, "value"));
+                    return settingError == null ? CommandSuccess("Ascent setting updated.") : CommandFailure("invalid_ascent_setting", settingError);
                 case "mechjeb.ascent.start":
                     MechJebModuleAscentAutopilot ascent = core.GetComputerModule<MechJebModuleAscentAutopilot>();
                     if (ascent == null) return CommandFailure("ascent_unavailable", "MechJeb ascent autopilot is unavailable.");
@@ -1736,7 +1739,9 @@ namespace ArmorOverhaul.ArmorControl
                     double verticalRoll = WireProtocol.ReadDouble(message.RawJson, "verticalRoll", 0);
                     double turnRoll = WireProtocol.ReadDouble(message.RawJson, "turnRoll", 0);
                     string ascentPathName = WireProtocol.ReadString(message.RawJson, "ascentPath") ?? "GRAVITYTURN";
-                    ascentType ascentPath;
+                    ascentType ascentPath = ascent.ascentPathIdxPublic;
+                    if (!WireProtocol.ReadBool(message.RawJson, "useCurrentSettings", false))
+                    {
                     if (!Enum.TryParse(ascentPathName, true, out ascentPath) || !Enum.IsDefined(typeof(ascentType), ascentPath))
                         return CommandFailure("invalid_parameter", "Unknown MechJeb ascent path.");
                     if (!IsFinite(orbitAltitudeKm) || orbitAltitudeKm < 1 || orbitAltitudeKm > 1000000)
@@ -1804,6 +1809,9 @@ namespace ArmorOverhaul.ArmorControl
                         pvg.FixedCoast = WireProtocol.ReadBool(message.RawJson, "pvgFixedCoast", pvg.FixedCoast);
                         pvg.FixedCoastLength.val = Math.Max(0, WireProtocol.ReadDouble(message.RawJson, "pvgFixedCoastLength", pvg.FixedCoastLength.val));
                     }
+                    }
+                    inclination = ascent.desiredInclination;
+                    ascentPath = ascent.ascentPathIdxPublic;
                     MechJebModuleAscentGuidance guidance = core.GetComputerModule<MechJebModuleAscentGuidance>();
                     ClearAscentLaunchFlags(guidance);
                     ascent.timedLaunch = false;
@@ -1858,6 +1866,13 @@ namespace ArmorOverhaul.ArmorControl
                     {
                         ClearAscentLaunchFlags(guidance);
                         return CommandFailure("no_solution", "MechJeb returned an invalid launch window.");
+                    }
+                    // Keep the native MJ window from overwriting legacy start parameters or
+                    // the inclination calculated by a target-plane launch on its next draw.
+                    if (guidance != null)
+                    {
+                        guidance.desiredInclination.val = ascent.desiredInclination;
+                        guidance.desiredLAN.val = ascent.desiredLAN;
                     }
                     if (launchMode != "IMMEDIATE") ascent.StartCountdown(Planetarium.GetUniversalTime() + launchDelay);
                     ascent.enabled = true;

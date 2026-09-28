@@ -13,7 +13,7 @@ namespace ArmorOverhaul.ArmorControl.Protocol
         internal static string Hello(string clientId)
         {
             return "{\"type\":\"hello\",\"protocol\":1,\"clientId\":" + Quote(clientId)
-                + ",\"capabilities\":[\"server.language.set\",\"telemetry.fast\",\"telemetry.regular\",\"telemetry.flightPanel\",\"telemetry.automation\",\"mechjeb.ascent\",\"mechjeb.ascent.targetLaunch\",\"mechjeb.landing\",\"mechjeb.docking\",\"mechjeb.rendezvous\",\"mechjeb.autowarp\",\"mechjeb.flightEnvelope\",\"trajectories.control\",\"target.catalog\",\"vessel.structure.live\",\"vessel.part.control\",\"vessel.part.actions\",\"vessel.view.selection\",\"vessel.aeroCenter.far\",\"vessel.crew.eva\",\"vessel.image.websocket\",\"recorder.incremental\",\"event.context\",\"event.vessel\",\"command.fifo\",\"command.idempotent\",\"control.deadman\",\"game.quicksave.load\",\"auth.sharedToken\",\"multiClient\"]}";
+                + ",\"capabilities\":[\"server.language.set\",\"telemetry.fast\",\"telemetry.regular\",\"telemetry.flightPanel\",\"telemetry.automation\",\"mechjeb.ascent.setting\",\"mechjeb.ascent\",\"mechjeb.ascent.targetLaunch\",\"mechjeb.landing\",\"mechjeb.docking\",\"mechjeb.rendezvous\",\"mechjeb.autowarp\",\"mechjeb.flightEnvelope\",\"trajectories.control\",\"target.catalog\",\"vessel.structure.live\",\"vessel.part.control\",\"vessel.part.actions\",\"vessel.view.selection\",\"vessel.aeroCenter.far\",\"vessel.crew.eva\",\"vessel.image.websocket\",\"recorder.incremental\",\"event.context\",\"event.vessel\",\"command.fifo\",\"command.idempotent\",\"control.deadman\",\"game.quicksave.load\",\"auth.sharedToken\",\"multiClient\"]}";
         }
 
         internal static string ServerSettings(string language)

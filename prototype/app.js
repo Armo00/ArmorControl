@@ -110,6 +110,7 @@
       reader.readAsDataURL(blob);
     });
     socket.addEventListener('close', () => {
+      resetAscentEdits();
       if (state.vesselSocket === socket) state.vesselSocket = null;
       if (vesselImageIsDesired() && state.connection === 'live') {
         state.vesselReconnectTimer = setTimeout(connectVesselImage, 1200);
@@ -205,6 +206,7 @@
         if ($('#armorLinkLatency')) $('#armorLinkLatency').textContent = `RTT ${Math.max(0, state.lastPongAt - state.lastPingAt).toFixed(0)} ms`;
       }
       if (message.type === 'command.ack') {
+        acknowledgeAscentSetting(message);
         if (message.commandId === state.languagePendingCommandId) {
           state.languagePendingCommandId = null;
           updateLanguageControl();
@@ -541,9 +543,7 @@
     $('#ascentStateChip').textContent = ascentEnabled ? (ascentTimed ? 'COUNTDOWN' : 'ACTIVE') : 'STANDBY';
     $('#ascentStatus').textContent = message.mechJebAvailable ? (message.ascentStatus || (ascentEnabled ? 'Ascent guidance engaged' : 'Waiting to start')) : 'MechJeb Unavailable';
     const ascentApoapsisKm = Number(message.ascentPvgDesiredApoapsis || 0) / 1000;
-    if (state.ascentDraft) {
-      renderAscentDraft();
-    } else {
+    {
       $('#ascentOrbitBadge').textContent = ascentPath === 'PVG' ? `PE ${ascentAltitudeKm.toFixed(0)} / AP ${ascentApoapsisKm.toFixed(0)} km` : `${ascentAltitudeKm.toFixed(0)} km`;
       $('#ascentReadoutAltitude').textContent = ascentPath === 'PVG' ? `PE ${ascentAltitudeKm.toFixed(1)} · AP ${ascentApoapsisKm.toFixed(1)} km` : `${ascentAltitudeKm.toFixed(1)} km`;
       $('#ascentReadoutInclination').textContent = `${ascentInclination.toFixed(1)}°`;
@@ -568,55 +568,55 @@
     $('#ascentReadoutLaunchMode').textContent = launchModeLabels[ascentLaunchMode] || ascentLaunchMode;
     const launchTargetState = $('#ascentLaunchTargetState');
     launchTargetState.classList.toggle('is-ready', Boolean(message.ascentLaunchTargetAvailable));
-    if (!state.ascentDraft && message.ascentPath) {
-      $('#ascentOrbitAltitude').value = ascentAltitudeKm.toFixed(1);
-      $('#ascentInclination').value = ascentInclination.toFixed(1);
-      $('#ascentPath').value = ascentPath;
     userText(launchTargetState.querySelector('b'), message.ascentLaunchTargetAvailable ? message.ascentLaunchTargetName : null,
       message.ascentLaunchTargetAvailable ? 'Target orbit available' : 'No valid target selected');
     launchTargetState.querySelector('small').textContent = message.ascentLaunchTargetAvailable ? 'Target orbits the launch body · MJ can compute a window' : 'Select a target orbiting the current body on the Target page first.';
+    if (message.ascentPath) {
+      syncAscentField('#ascentOrbitAltitude', 'value', ascentAltitudeKm.toFixed(1));
+      syncAscentField('#ascentInclination', 'value', ascentInclination.toFixed(1));
+      syncAscentField('#ascentPath', 'value', ascentPath);
       const launchModeOption = Array.from($('#ascentLaunchMode').options).find(option => option.value === ascentLaunchMode);
-      if (launchModeOption) $('#ascentLaunchMode').value = ascentLaunchMode;
-      $('#ascentLaunchPhaseAngle').value = Number(message.ascentLaunchPhaseAngle || 0).toFixed(1);
-      $('#ascentLaunchLanDifference').value = Number(message.ascentLaunchLanDifference || 0).toFixed(1);
-      $('#ascentAutoThrottle').checked = Boolean(message.ascentAutoThrottle);
-      $('#ascentCorrectiveSteering').checked = Boolean(message.ascentCorrectiveSteering);
-      $('#ascentAutoStage').checked = Boolean(message.ascentAutoStage);
-      $('#ascentSkipCircularization').checked = Boolean(message.ascentSkipCircularization);
-      $('#ascentLimitAoA').checked = Boolean(message.ascentLimitAoA);
-      $('#ascentMaxAoA').value = Number(message.ascentMaxAoA || 0).toFixed(1);
-      $('#ascentLimitQ').checked = Boolean(message.ascentLimitQEnabled);
-      $('#ascentMaxQ').value = (Number(message.ascentLimitQ || 0) / 1000).toFixed(1);
-      $('#ascentForceRoll').checked = Boolean(message.ascentForceRoll);
-      $('#ascentVerticalRoll').value = Number(message.ascentVerticalRoll || 0).toFixed(1);
-      $('#ascentTurnRoll').value = Number(message.ascentTurnRoll || 0).toFixed(1);
-      $('#ascentDesiredLan').value = Number(message.ascentDesiredLan || 0).toFixed(1);
-      $('#ascentCorrectiveGain').value = Number(message.ascentCorrectiveSteeringGain || 0).toFixed(2);
-      $('#ascentDeploySolar').checked = Boolean(message.ascentDeploySolarPanels);
-      $('#ascentDeployAntennas').checked = Boolean(message.ascentDeployAntennas);
-      $('#ascentRollAltitude').value = (Number(message.ascentRollAltitude || 0) / 1000).toFixed(2);
-      $('#ascentAoAFadePressure').value = (Number(message.ascentAoAFadeoutPressure || 0) / 1000).toFixed(2);
-      $('#gtStartAltitude').value = (Number(message.ascentGtTurnStartAltitude || 0) / 1000).toFixed(2);
-      $('#gtStartVelocity').value = Number(message.ascentGtTurnStartVelocity || 0).toFixed(1);
-      $('#gtStartPitch').value = Number(message.ascentGtTurnStartPitch || 0).toFixed(1);
-      $('#gtIntermediateAltitude').value = (Number(message.ascentGtIntermediateAltitude || 0) / 1000).toFixed(1);
-      $('#gtHoldApTime').value = Number(message.ascentGtHoldApTime || 0).toFixed(1);
-      $('#classicStartAltitude').value = (Number(message.ascentClassicTurnStartAltitude || 0) / 1000).toFixed(2);
-      $('#classicStartVelocity').value = Number(message.ascentClassicTurnStartVelocity || 0).toFixed(1);
-      $('#classicEndAltitude').value = (Number(message.ascentClassicTurnEndAltitude || 0) / 1000).toFixed(1);
-      $('#classicEndAngle').value = Number(message.ascentClassicTurnEndAngle || 0).toFixed(1);
-      $('#classicShapeExponent').value = Number(message.ascentClassicTurnShapeExponent || 0).toFixed(2);
-      $('#classicAutoPath').checked = Boolean(message.ascentClassicAutoPath);
-      $('#pvgPitchStartVelocity').value = Number(message.ascentPvgPitchStartVelocity || 0).toFixed(1);
-      $('#pvgPitchRate').value = Number(message.ascentPvgPitchRate || 0).toFixed(2);
-      $('#pvgDesiredApoapsis').value = (Number(message.ascentPvgDesiredApoapsis || 0) / 1000).toFixed(1);
-      $('#pvgAttachAltitudeEnabled').checked = Boolean(message.ascentPvgAttachAltitudeEnabled);
-      $('#pvgAttachAltitude').value = (Number(message.ascentPvgDesiredAttachAltitude || 0) / 1000).toFixed(2);
-      $('#pvgDynamicPressureTrigger').value = (Number(message.ascentPvgDynamicPressureTrigger || 0) / 1000).toFixed(2);
-      $('#pvgStagingTriggerEnabled').checked = Boolean(message.ascentPvgStagingTriggerEnabled);
-      $('#pvgStagingTrigger').value = Number(message.ascentPvgStagingTrigger || 0).toFixed(0);
-      $('#pvgFixedCoast').checked = Boolean(message.ascentPvgFixedCoast);
-      $('#pvgFixedCoastLength').value = Number(message.ascentPvgFixedCoastLength || 0).toFixed(1);
+      if (launchModeOption) syncAscentField('#ascentLaunchMode', 'value', ascentLaunchMode);
+      syncAscentField('#ascentLaunchPhaseAngle', 'value', Number(message.ascentLaunchPhaseAngle || 0).toFixed(1));
+      syncAscentField('#ascentLaunchLanDifference', 'value', Number(message.ascentLaunchLanDifference || 0).toFixed(1));
+      syncAscentField('#ascentAutoThrottle', 'checked', Boolean(message.ascentAutoThrottle));
+      syncAscentField('#ascentCorrectiveSteering', 'checked', Boolean(message.ascentCorrectiveSteering));
+      syncAscentField('#ascentAutoStage', 'checked', Boolean(message.ascentAutoStage));
+      syncAscentField('#ascentSkipCircularization', 'checked', Boolean(message.ascentSkipCircularization));
+      syncAscentField('#ascentLimitAoA', 'checked', Boolean(message.ascentLimitAoA));
+      syncAscentField('#ascentMaxAoA', 'value', Number(message.ascentMaxAoA || 0).toFixed(1));
+      syncAscentField('#ascentLimitQ', 'checked', Boolean(message.ascentLimitQEnabled));
+      syncAscentField('#ascentMaxQ', 'value', (Number(message.ascentLimitQ || 0) / 1000).toFixed(1));
+      syncAscentField('#ascentForceRoll', 'checked', Boolean(message.ascentForceRoll));
+      syncAscentField('#ascentVerticalRoll', 'value', Number(message.ascentVerticalRoll || 0).toFixed(1));
+      syncAscentField('#ascentTurnRoll', 'value', Number(message.ascentTurnRoll || 0).toFixed(1));
+      syncAscentField('#ascentDesiredLan', 'value', Number(message.ascentDesiredLan || 0).toFixed(1));
+      syncAscentField('#ascentCorrectiveGain', 'value', Number(message.ascentCorrectiveSteeringGain || 0).toFixed(2));
+      syncAscentField('#ascentDeploySolar', 'checked', Boolean(message.ascentDeploySolarPanels));
+      syncAscentField('#ascentDeployAntennas', 'checked', Boolean(message.ascentDeployAntennas));
+      syncAscentField('#ascentRollAltitude', 'value', (Number(message.ascentRollAltitude || 0) / 1000).toFixed(2));
+      syncAscentField('#ascentAoAFadePressure', 'value', (Number(message.ascentAoAFadeoutPressure || 0) / 1000).toFixed(2));
+      syncAscentField('#gtStartAltitude', 'value', (Number(message.ascentGtTurnStartAltitude || 0) / 1000).toFixed(2));
+      syncAscentField('#gtStartVelocity', 'value', Number(message.ascentGtTurnStartVelocity || 0).toFixed(1));
+      syncAscentField('#gtStartPitch', 'value', Number(message.ascentGtTurnStartPitch || 0).toFixed(1));
+      syncAscentField('#gtIntermediateAltitude', 'value', (Number(message.ascentGtIntermediateAltitude || 0) / 1000).toFixed(1));
+      syncAscentField('#gtHoldApTime', 'value', Number(message.ascentGtHoldApTime || 0).toFixed(1));
+      syncAscentField('#classicStartAltitude', 'value', (Number(message.ascentClassicTurnStartAltitude || 0) / 1000).toFixed(2));
+      syncAscentField('#classicStartVelocity', 'value', Number(message.ascentClassicTurnStartVelocity || 0).toFixed(1));
+      syncAscentField('#classicEndAltitude', 'value', (Number(message.ascentClassicTurnEndAltitude || 0) / 1000).toFixed(1));
+      syncAscentField('#classicEndAngle', 'value', Number(message.ascentClassicTurnEndAngle || 0).toFixed(1));
+      syncAscentField('#classicShapeExponent', 'value', Number(message.ascentClassicTurnShapeExponent || 0).toFixed(2));
+      syncAscentField('#classicAutoPath', 'checked', Boolean(message.ascentClassicAutoPath));
+      syncAscentField('#pvgPitchStartVelocity', 'value', Number(message.ascentPvgPitchStartVelocity || 0).toFixed(1));
+      syncAscentField('#pvgPitchRate', 'value', Number(message.ascentPvgPitchRate || 0).toFixed(2));
+      syncAscentField('#pvgDesiredApoapsis', 'value', (Number(message.ascentPvgDesiredApoapsis || 0) / 1000).toFixed(1));
+      syncAscentField('#pvgAttachAltitudeEnabled', 'checked', Boolean(message.ascentPvgAttachAltitudeEnabled));
+      syncAscentField('#pvgAttachAltitude', 'value', (Number(message.ascentPvgDesiredAttachAltitude || 0) / 1000).toFixed(2));
+      syncAscentField('#pvgDynamicPressureTrigger', 'value', (Number(message.ascentPvgDynamicPressureTrigger || 0) / 1000).toFixed(2));
+      syncAscentField('#pvgStagingTriggerEnabled', 'checked', Boolean(message.ascentPvgStagingTriggerEnabled));
+      syncAscentField('#pvgStagingTrigger', 'value', Number(message.ascentPvgStagingTrigger || 0).toFixed(0));
+      syncAscentField('#pvgFixedCoast', 'checked', Boolean(message.ascentPvgFixedCoast));
+      syncAscentField('#pvgFixedCoastLength', 'value', Number(message.ascentPvgFixedCoastLength || 0).toFixed(1));
       updateAscentPathPanel();
       updateAscentLaunchMode();
     }
@@ -2264,10 +2264,275 @@
     });
   });
 
-  $$('[data-auto-view="ascent"] input:not([type="range"]), [data-auto-view="ascent"] select').forEach(input => {
-    input.addEventListener('input', () => { state.ascentDraft = true; renderAscentDraft(); });
-    input.addEventListener('change', () => { state.ascentDraft = true; renderAscentDraft(); });
-  });
+  const ascentBindings = {
+  "#ascentOrbitAltitude": {
+    "field": "orbitAltitudeKm",
+    "property": "value"
+  },
+  "#ascentInclination": {
+    "field": "inclination",
+    "property": "value"
+  },
+  "#ascentPath": {
+    "field": "ascentPath",
+    "property": "value"
+  },
+  "#ascentLaunchPhaseAngle": {
+    "field": "launchPhaseAngle",
+    "property": "value"
+  },
+  "#ascentLaunchLanDifference": {
+    "field": "launchLanDifference",
+    "property": "value"
+  },
+  "#ascentAutoThrottle": {
+    "field": "autoThrottle",
+    "property": "checked"
+  },
+  "#ascentCorrectiveSteering": {
+    "field": "correctiveSteering",
+    "property": "checked"
+  },
+  "#ascentAutoStage": {
+    "field": "autoStage",
+    "property": "checked"
+  },
+  "#ascentSkipCircularization": {
+    "field": "skipCircularization",
+    "property": "checked"
+  },
+  "#ascentLimitAoA": {
+    "field": "limitAoA",
+    "property": "checked"
+  },
+  "#ascentMaxAoA": {
+    "field": "maxAoA",
+    "property": "value"
+  },
+  "#ascentLimitQ": {
+    "field": "limitQ",
+    "property": "checked"
+  },
+  "#ascentMaxQ": {
+    "field": "maxQKpa",
+    "property": "value"
+  },
+  "#ascentForceRoll": {
+    "field": "forceRoll",
+    "property": "checked"
+  },
+  "#ascentVerticalRoll": {
+    "field": "verticalRoll",
+    "property": "value"
+  },
+  "#ascentTurnRoll": {
+    "field": "turnRoll",
+    "property": "value"
+  },
+  "#ascentDesiredLan": {
+    "field": "desiredLan",
+    "property": "value"
+  },
+  "#ascentCorrectiveGain": {
+    "field": "correctiveSteeringGain",
+    "property": "value"
+  },
+  "#ascentDeploySolar": {
+    "field": "deploySolarPanels",
+    "property": "checked"
+  },
+  "#ascentDeployAntennas": {
+    "field": "deployAntennas",
+    "property": "checked"
+  },
+  "#ascentRollAltitude": {
+    "field": "rollAltitudeKm",
+    "property": "value"
+  },
+  "#ascentAoAFadePressure": {
+    "field": "aoaFadeoutKpa",
+    "property": "value"
+  },
+  "#gtStartAltitude": {
+    "field": "gtTurnStartAltitudeKm",
+    "property": "value"
+  },
+  "#gtStartVelocity": {
+    "field": "gtTurnStartVelocity",
+    "property": "value"
+  },
+  "#gtStartPitch": {
+    "field": "gtTurnStartPitch",
+    "property": "value"
+  },
+  "#gtIntermediateAltitude": {
+    "field": "gtIntermediateAltitudeKm",
+    "property": "value"
+  },
+  "#gtHoldApTime": {
+    "field": "gtHoldApTime",
+    "property": "value"
+  },
+  "#classicAutoPath": {
+    "field": "classicAutoPath",
+    "property": "checked"
+  },
+  "#classicStartAltitude": {
+    "field": "classicTurnStartAltitudeKm",
+    "property": "value"
+  },
+  "#classicStartVelocity": {
+    "field": "classicTurnStartVelocity",
+    "property": "value"
+  },
+  "#classicEndAltitude": {
+    "field": "classicTurnEndAltitudeKm",
+    "property": "value"
+  },
+  "#classicEndAngle": {
+    "field": "classicTurnEndAngle",
+    "property": "value"
+  },
+  "#classicShapeExponent": {
+    "field": "classicTurnShapeExponent",
+    "property": "value"
+  },
+  "#pvgPitchStartVelocity": {
+    "field": "pvgPitchStartVelocity",
+    "property": "value"
+  },
+  "#pvgPitchRate": {
+    "field": "pvgPitchRate",
+    "property": "value"
+  },
+  "#pvgDesiredApoapsis": {
+    "field": "pvgDesiredApoapsisKm",
+    "property": "value"
+  },
+  "#pvgAttachAltitudeEnabled": {
+    "field": "pvgAttachAltitudeEnabled",
+    "property": "checked"
+  },
+  "#pvgAttachAltitude": {
+    "field": "pvgDesiredAttachAltitudeKm",
+    "property": "value"
+  },
+  "#pvgDynamicPressureTrigger": {
+    "field": "pvgDynamicPressureTriggerKpa",
+    "property": "value"
+  },
+  "#pvgStagingTriggerEnabled": {
+    "field": "pvgStagingTriggerEnabled",
+    "property": "checked"
+  },
+  "#pvgStagingTrigger": {
+    "field": "pvgStagingTrigger",
+    "property": "value"
+  },
+  "#pvgFixedCoast": {
+    "field": "pvgFixedCoast",
+    "property": "checked"
+  },
+  "#pvgFixedCoastLength": {
+    "field": "pvgFixedCoastLength",
+    "property": "value"
+  }
+};
+  const ascentEdits = new Map();
+  const ascentServerValues = new Map();
+  let ascentLaunchDraft = false;
+
+  function resetAscentField(selector) {
+    const edit = ascentEdits.get(selector);
+    if (edit?.timer) clearTimeout(edit.timer);
+    ascentEdits.delete(selector);
+    const input = $(selector);
+    const saved = ascentServerValues.get(selector);
+    if (saved) input[saved.property] = saved.value;
+    input.disabled = false;
+  }
+  function resetAscentEdits() {
+    Array.from(ascentEdits.keys()).forEach(resetAscentField);
+  }
+  function sameAscentValue(binding, left, right) {
+    if (binding.property === 'checked' || binding.field === 'ascentPath') return left === right;
+    const digits = String(right).includes('.') ? String(right).split('.')[1].length : 0;
+    return Number(Number(left).toFixed(digits)) === Number(right);
+  }
+  function syncAscentField(selector, property, value) {
+    ascentServerValues.set(selector, { property, value });
+    const input = $(selector);
+    const binding = ascentBindings[selector];
+    const edit = ascentEdits.get(selector);
+    if (edit?.commandId && edit.acknowledged && sameAscentValue(binding, edit.value, value)) resetAscentField(selector);
+    if (!ascentEdits.has(selector) && !(selector === '#ascentLaunchMode' && ascentLaunchDraft)) input[property] = value;
+    if (binding) {
+      const locked = (selector === '#ascentPath' && Boolean(state.lastAutomation?.ascentEnabled)) ||
+        (selector === '#ascentInclination' && Boolean(state.lastAutomation?.ascentTimedLaunch) &&
+          state.lastAutomation?.ascentLaunchMode === 'TARGET_PLANE');
+      input.disabled = !state.serverCapabilities.has('mechjeb.ascent.setting') || Boolean(ascentEdits.get(selector)?.commandId) || locked;
+      input.title = locked ? (selector === '#ascentPath' ? 'Stop ascent guidance before changing the ascent profile.' :
+        'Target-plane launch controls the inclination.') : '';
+    }
+  }
+  function acknowledgeAscentSetting(message) {
+    for (const [selector, edit] of ascentEdits) {
+      if (edit.commandId !== message.commandId) continue;
+      if (!message.success) resetAscentField(selector);
+      else {
+        edit.acknowledged = true;
+        // Wait for readback; an acknowledgement is not itself a telemetry value.
+      }
+    }
+  }
+  function commitAscentField(selector) {
+    const input = $(selector), binding = ascentBindings[selector];
+    let edit = ascentEdits.get(selector);
+    if (edit?.commandId) return;
+    const raw = input[binding.property];
+    const baseline = edit?.baseline ?? ascentServerValues.get(selector)?.value;
+    if (raw === baseline || (binding.property !== 'checked' && binding.field !== 'ascentPath' &&
+      String(raw).trim() && Number(raw) === Number(baseline))) { resetAscentField(selector); return; }
+    if (binding.property !== 'checked' && binding.field !== 'ascentPath' &&
+      (!String(raw).trim() || !Number.isFinite(Number(raw)))) {
+      resetAscentField(selector);
+      showToast('Invalid ascent setting value.');
+      return;
+    }
+    if (!state.serverCapabilities.has('mechjeb.ascent.setting')) {
+      resetAscentField(selector);
+      showToast('Ascent setting updates require a compatible server.');
+      return;
+    }
+    const commandId = sendCommand('mechjeb.ascent.setting', {field: binding.field, value: String(raw)});
+    if (!commandId) { resetAscentField(selector); showToast('No live connection; ascent setting not updated.'); return; }
+    edit = { commandId, value: raw, acknowledged: false };
+    ascentEdits.set(selector, edit);
+    input.disabled = true;
+    edit.timer = setTimeout(() => {
+      if (ascentEdits.get(selector) !== edit) return;
+      resetAscentField(selector);
+      showToast('Ascent setting readback timed out; showing the latest game value.');
+    }, 5000);
+  }
+  for (const [selector, binding] of Object.entries(ascentBindings)) {
+    const input = $(selector);
+    if (input.tagName === 'SELECT' || binding.property === 'checked') {
+      input.addEventListener('change', () => commitAscentField(selector));
+    } else {
+      input.addEventListener('focus', () => {
+        if (!ascentEdits.has(selector)) ascentEdits.set(selector, {baseline: input.value});
+      });
+      input.addEventListener('blur', () => commitAscentField(selector));
+      input.addEventListener('keydown', event => {
+        if (event.key === 'Enter') { event.preventDefault(); commitAscentField(selector); input.blur(); }
+        if (event.key === 'Escape') { event.preventDefault(); resetAscentField(selector); input.blur(); }
+      });
+    }
+  }
+  // Launch timing is an action prepared locally, not a parameter write that arms a launch.
+  $('#ascentLaunchMode').addEventListener('change', () => { ascentLaunchDraft = true; });
+
 
   function updateAscentPathPanel() {
     const path = String($('#ascentPath').value || 'GRAVITYTURN').toUpperCase();
@@ -2519,7 +2784,7 @@
       pvgAttachAltitudeKm: ascentDraftNumber('#pvgAttachAltitude')
     });
   }
-  $('#ascentPath').addEventListener('change', () => { updateAscentPathPanel(); renderAscentDraft(); });
+  $('#ascentPath').addEventListener('change', () => { updateAscentPathPanel(); });
   function updateAscentLaunchMode() {
     const mode = String($('#ascentLaunchMode').value || 'IMMEDIATE').toUpperCase();
     $('#ascentCountdownField').hidden = mode !== 'COUNTDOWN';
@@ -2527,7 +2792,7 @@
       label.hidden = !String(label.dataset.launchOption || '').split(/\s+/).includes(mode);
     });
   }
-  $('#ascentLaunchMode').addEventListener('change', () => { updateAscentLaunchMode(); renderAscentDraft(); });
+  $('#ascentLaunchMode').addEventListener('change', () => { updateAscentLaunchMode(); });
   updateAscentPathPanel();
   updateAscentLaunchMode();
   renderAscentDraft();
@@ -2584,32 +2849,25 @@
   }
 
   $('#startAscent').addEventListener('click', () => {
-    const parameters = ascentParameters();
-    if (!(parameters.orbitAltitudeKm > 0) || !Number.isFinite(parameters.inclination)) {
-      showToast('请检查目标轨道高度和倾角');
-      return;
+    if (!state.serverCapabilities.has('mechjeb.ascent.setting')) {
+      showToast('Ascent setting updates require a compatible server.'); return;
     }
-    if (String(parameters.ascentPath).toUpperCase() === 'PVG'
-      && (!(parameters.pvgDesiredApoapsisKm > 0) || parameters.pvgDesiredApoapsisKm < parameters.orbitAltitudeKm)) {
-      showToast('PVG 目标远拱点 AP 必须不低于目标近拱点 PE');
-      return;
+    if (Array.from(ascentEdits.values()).some(edit => edit.commandId)) {
+      showToast('Wait for ascent settings to be confirmed.'); return;
     }
-    if (['TARGET_PLANE', 'TARGET_LAN', 'RENDEZVOUS'].includes(String(parameters.launchMode).toUpperCase())
-      && !state.lastAutomation?.ascentLaunchTargetAvailable) {
-      showToast('请先选择绕当前发射天体运行的目标轨道');
-      return;
+    const countdown = Number($('#ascentCountdown').value);
+    if (!Number.isFinite(countdown) || countdown < 0 || countdown > 86400) {
+      showToast('Launch countdown must be between 0 and 86,400 seconds.'); return;
     }
-    if (sendCommand('mechjeb.ascent.start', parameters)) {
-      state.ascentDraft = false;
-    } else {
-      showToast('实时连接不可用，未启动自动发射');
-    }
+    if (sendCommand('mechjeb.ascent.start', {useCurrentSettings: true, launchMode: $('#ascentLaunchMode').value, countdown})) {
+      ascentLaunchDraft = false;
+    } else showToast('No live connection; ascent not started');
   });
 
   [$('#autoWarpPlanner'), $('#autoWarpAutopilot')].forEach(input => input?.addEventListener('change', () => {
     const enabled = input.checked;
     [$('#autoWarpPlanner'), $('#autoWarpAutopilot')].forEach(peer => { if (peer) peer.checked = enabled; });
-    if (!sendCommand('mechjeb.autowarp.set', { enabled })) showToast('实时连接不可用，未更新自动时间加速');
+    if (!sendCommand('mechjeb.autowarp.set', { enabled })) showToast('No live connection; auto-warp not updated');
   }));
 
   $('#startRendezvous').addEventListener('click', () => {
