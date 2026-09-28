@@ -3158,10 +3158,12 @@
     context.restore();
   }
   function formatDuration(seconds) {
-    const safe = Math.max(0, Number(seconds) || 0);
-    const hours = Math.floor(safe / 3600);
-    const minutes = Math.floor((safe % 3600) / 60);
-    const secs = safe % 60;
+    const value = Number(seconds);
+    // Round the total first so a displayed 60.0 seconds carries into minutes/hours.
+    const tenths = Math.round(Math.max(0, Number.isFinite(value) ? value : 0) * 10);
+    const hours = Math.floor(tenths / 36000);
+    const minutes = Math.floor((tenths % 36000) / 600);
+    const secs = (tenths % 600) / 10;
     return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${secs.toFixed(1).padStart(4, '0')}`;
   }
 
