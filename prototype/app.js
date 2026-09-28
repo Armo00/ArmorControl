@@ -1,5 +1,12 @@
 (() => {
   const sourceText = element => window.ArmorI18n ? window.ArmorI18n.sourceText(element) : (element?.textContent || '');
+  const uiLocale = () => window.ArmorI18n?.locale || 'en-US';
+  function userText(element, value, fallback = '—') {
+    if (!element) return;
+    if (value) element.setAttribute('data-l10n-skip', '');
+    else element.removeAttribute('data-l10n-skip');
+    element.textContent = value || fallback;
+  }
   const $ = (selector, scope = document) => scope.querySelector(selector);
   const $$ = (selector, scope = document) => [...scope.querySelectorAll(selector)];
   const fragmentToken = new URLSearchParams(location.hash.slice(1)).get('token');
@@ -18,7 +25,7 @@
     quietCommands: new Set(), controlTimer: null,
     ascentDraft: false, smartAssDraft: false, smartAssPendingTarget: null, smartAssPendingCommandId: null,
     smartAssOffsetStep: 1,
-    smartAssActualTarget: 'OFF', serverCapabilities: new Set(),
+    smartAssActualTarget: 'OFF', serverCapabilities: new Set(), languagePendingCommandId: null,
     control: { pitch: 0, yaw: 0, roll: 0, throttle: 0, engaged: false, throttleLocked: false }, accessToken,
     vesselStructure: null, crewSignature: '', selectedPartId: null, highlightedPartId: null, partGroup: 'all',
     targetCatalog: [], targetCatalogSignature: '', selectedTargetId: null, expandedTargets: new Set(), lastAutomation: null,
@@ -84,7 +91,7 @@
     if (state.vesselSocket && state.vesselSocket.readyState < WebSocket.CLOSING) return;
     const stage = $('#vesselRenderStage');
     const status = $('#vesselRenderStatus span');
-    if (status && !stage.classList.contains('has-image')) status.textContent = '正在等待游戏渲染载具';
+    if (status && !stage.classList.contains('has-image')) status.textContent = 'Waiting for vessel rendering';
     let socket;
     try { socket = new WebSocket(vesselSocketUrl()); } catch { return; }
     socket.binaryType = 'blob';
@@ -119,16 +126,19 @@
     clearTimeout(state.reconnectTimer);
     if (state.protocolBlocked) return;
     const delay = Math.min(5000, 750 * Math.pow(1.65, state.reconnectAttempt++));
-    const detail = state.accessToken ? `等待游戏 DLL · ${(delay / 1000).toFixed(1)} s 后重试` : '若 DLL 已运行，请在网址末尾添加 #token=访问令牌';
-    setConnectionState('offline', '等待游戏', detail);
+    const detail = `Check server status, port and network. Retrying in ${(delay / 1000).toFixed(1)} s.`;
+    setConnectionState('offline', 'Waiting for game', detail);
     state.reconnectTimer = setTimeout(connectRealtime, delay);
   }
 
   function connectRealtime() {
+    state.serverCapabilities = new Set();
+    state.languagePendingCommandId = null;
+    updateLanguageControl();
     clearTimeout(state.reconnectTimer);
     clearInterval(state.heartbeatTimer);
     if (state.socket && state.socket.readyState < 2) state.socket.close();
-    setConnectionState('connecting', '正在连接', 'WebSocket · /ws/realtime');
+    setConnectionState('connecting', 'Connecting', 'WebSocket · /ws/realtime');
     let socket;
     try { socket = new WebSocket(socketUrl()); }
     catch { scheduleReconnect(); return; }
@@ -137,7 +147,7 @@
     socket.addEventListener('open', () => {
       state.reconnectAttempt = 0;
       state.highlightedPartId = null;
-      setConnectionState('connecting', '链路已建立', '等待首个遥测帧');
+      setConnectionState('connecting', 'Link established', 'Waiting for first telemetry frame');
       state.heartbeatTimer = setInterval(() => {
         if (socket.readyState === WebSocket.OPEN) {
           state.lastPingAt = performance.now();
@@ -152,8 +162,8 @@
       if (message.type === 'hello') {
         if (message.protocol !== 1) {
           state.protocolBlocked = true;
-          setConnectionState('offline', '版本不兼容', `网页 v1 · 服务端 v${message.protocol ?? '?'}`);
-          showToast('ArmorControl 协议版本不兼容，请更新网页或 DLL');
+          setConnectionState('offline', 'Version mismatch', `Web v1 · server v${message.protocol ?? '?'}`);
+          showToast('ArmorControl Protocol mismatch. Update the web files or DLL.');
           socket.close(1000, 'protocol mismatch');
           return;
         }
@@ -162,17 +172,19 @@
         state.recorderRevision = undefined;
         state.recorderSamples = [];
         state.serverCapabilities = new Set(Array.isArray(message.capabilities) ? message.capabilities : []);
+        updateLanguageControl();
         const quickloadButton = $('#holdQuickload');
         if (quickloadButton) {
           const supported = state.serverCapabilities.has('game.quicksave.load');
           quickloadButton.disabled = !supported;
-          quickloadButton.title = supported ? '' : '需要重新启动 KSP 以加载支持 quicksave 的新版 ArmorControl DLL';
+          quickloadButton.title = supported ? '' : 'Restart KSP to load an ArmorControl DLL with quicksave support.';
         }
         fetchStructuralData();
         fetchRecorderHistory();
         if (vesselViewIsActive()) connectVesselImage();
         return;
       }
+      if (message.type === 'server.settings') window.ArmorI18n?.followServerLanguage(message.language);
       if (message.type === 'telemetry.fast') acceptTelemetry(message);
       if (message.type === 'telemetry.regular') acceptRegularTelemetry(message);
       if (message.type === 'telemetry.flightPanel') renderFlightPanel(message);
@@ -193,6 +205,10 @@
         if ($('#armorLinkLatency')) $('#armorLinkLatency').textContent = `RTT ${Math.max(0, state.lastPongAt - state.lastPingAt).toFixed(0)} ms`;
       }
       if (message.type === 'command.ack') {
+        if (message.commandId === state.languagePendingCommandId) {
+          state.languagePendingCommandId = null;
+          updateLanguageControl();
+        }
         const quiet = state.quietCommands.delete(message.commandId);
         if (message.commandId === state.smartAssPendingCommandId && message.success) state.smartAssPendingCommandId = null;
         if (message.commandId === state.smartAssPendingCommandId && !message.success) {
@@ -205,11 +221,13 @@
           state.trajectorySettingsDraft = false;
         }
         if (quiet && !message.success && state.control.engaged) disarmContinuousControl(false);
-        if (!quiet || !message.success) showToast(message.success ? `命令 ${message.commandId} 已执行` : `命令失败：${message.message}`);
+        if (!quiet || !message.success) showToast(message.success ? `Command ${message.commandId} Executed` : `Command failed:${message.message}`);
       }
-      if (message.type === 'error') showToast(`服务错误：${message.message || message.code || '未知错误'}`);
+      if (message.type === 'error') showToast(`Server error:${message.message || message.code || 'Unknown error'}`);
     });
     socket.addEventListener('close', () => {
+      state.languagePendingCommandId = null;
+      updateLanguageControl();
       clearInterval(state.heartbeatTimer);
       disarmContinuousControl(false);
       state.quietCommands.clear();
@@ -228,10 +246,10 @@
     while (state.sampleTimes.length && state.sampleTimes[0] < now - 1000) state.sampleTimes.shift();
     if (previousConnection !== 'live') {
       state.liveSince = now;
-      showToast(previousConnection === 'stale' ? '实时遥测已恢复' : '已连接 ArmorControl 游戏服务');
+      showToast(previousConnection === 'stale' ? 'Live telemetry restored' : 'Connected to ArmorControl game server');
     }
-    setConnectionState('live', '实时', `${state.sampleTimes.length} Hz · #${message.sequence}`);
-    $('#activeVesselName').textContent = message.vesselName || '无活动载具';
+    setConnectionState('live', 'Live', `${state.sampleTimes.length} Hz · #${message.sequence}`);
+    userText($('#activeVesselName'), message.vesselName, 'No active vessel');
     $('#vesselOrdinal').textContent = message.vesselId ? message.vesselId.slice(0, 2).toUpperCase() : '—';
     if (!message.vesselId) {
       $('#currentThrust').textContent = '—';
@@ -256,12 +274,12 @@
     pe.dataset.pe = periapsisKm;
     pe.classList.toggle('is-negative', periapsisKm < 0);
     $('#periapsisStatus').textContent = periapsisKm < 0 ? 'SUB-ORBITAL' : `T− ${formatDuration(message.timeToPeriapsis)}`;
-    const situations = { ORBITING: '轨道飞行', SUB_ORBITAL: '亚轨道', FLYING: '大气飞行', LANDED: '已着陆', SPLASHED: '已溅落', ESCAPING: '逃逸轨道' };
-    $('#flightSituation').textContent = situations[message.situation] || message.situation || '无活动载具';
+    const situations = { ORBITING: 'Orbiting', SUB_ORBITAL: 'Suborbital', FLYING: 'Atmospheric flight', LANDED: 'Landed', SPLASHED: 'Splashed', ESCAPING: 'Escaping' };
+    $('#flightSituation').textContent = situations[message.situation] || message.situation || 'No active vessel';
     const body = message.body || '—';
     $('#orbitMapBody').textContent = body.toUpperCase();
     $('#porkOriginBody').textContent = body;
-    const target = message.targetName || '未选择';
+    const target = message.targetName || 'Not selected';
     $('#porkTargetBody').textContent = target;
     $('#porkRouteLabel').textContent = `INTERPLANETARY SOLVER / ${body.toUpperCase()} → ${target.toUpperCase()}`;
     renderOrbitSummaries(message);
@@ -269,6 +287,7 @@
 
   function renderOrbitSummaries(message) {
     if (!message) return;
+    const situations = { ORBITING: 'Orbiting', SUB_ORBITAL: 'Suborbital', FLYING: 'Atmospheric flight', LANDED: 'Landed', SPLASHED: 'Splashed', ESCAPING: 'Escaping' };
     const apoapsis = Number(message.apoapsis || 0) / 1000;
     const periapsis = Number(message.periapsis || 0) / 1000;
     $$('.orbit-summary-values').forEach(summary => {
@@ -280,10 +299,10 @@
         values[1].dataset.pe = periapsis;
       }
     });
-    $$('.ledger-feature').filter(item => sourceText(item.querySelector(':scope > span')).trim() === '当前轨道')
+    $$('.ledger-feature').filter(item => sourceText(item.querySelector(':scope > span')).trim() === 'Current orbit')
       .forEach(item => {
         const detail = item.querySelector(':scope > small');
-        if (detail) detail.textContent = `${message.body || '—'} · ${message.situation || '—'}`;
+        if (detail) detail.innerHTML = `<span data-l10n-skip>${escapeHtml(message.body || '—')}</span> · <span>${escapeHtml(situations[message.situation] || message.situation || '—')}</span>`;
       });
   }
 
@@ -302,43 +321,43 @@
       return !text || /^(inf(?:inity)?|nan)$/i.test(text) ? 'N/A' : text;
     };
     const map = {
-      '倾角': `${fixed(message.orbitInclination, 3)}°`, '周期': duration(message.orbitPeriod),
-      '轨道速度': `${fixed(message.orbitalSpeed, 0)} m/s`, '到远拱点': duration(message.timeToApoapsis),
-      '到近拱点': duration(message.timeToPeriapsis), 'SOI 转换': message.timeToSoiTransition || 'N/A',
-      '离心率': fixed(message.orbitEccentricity, 4), '载具底部高度': `${fixed(Number(message.altitudeBottom) / 1000, 2)} km`,
-      '坐标': message.coordinates || 'N/A', '航向': `${fixed(message.heading, 1)}°`,
-      '表面重力': `${fixed(message.surfaceGravity, 2)} m/s²`, '地表速度': `${fixed(message.surfaceSpeed, 0)} m/s`,
-      '垂直速度': `${finite(message.verticalSpeed) && Number(message.verticalSpeed) >= 0 ? '+' : ''}${fixed(message.verticalSpeed, 1)} m/s`,
-      '水平地表速度': `${fixed(message.horizontalSurfaceSpeed, 0)} m/s`, '最大加速度': `${fixed(message.maximumAcceleration, 2)} m/s²`,
-      '当前推力加速度': `${fixed(message.currentAcceleration, 2)} m/s²`, '最大推力': `${fixed(Number(message.maximumThrust) / 1000, 2)} MN`,
-      '当前推力': `${fixed(Number(message.currentThrust) / 1000, 2)} MN`, '海平面 TWR': fixed(message.surfaceTwr, 2),
-      '当地 TWR': fixed(message.localTwr, 2), '当前油门 TWR': fixed(message.throttleTwr, 2),
-      '当前 G 力': `${fixed(message.geeForce, 2)} g`, '当前级 Δv · ATM / VAC': `${fixed(message.stageDeltaVAtmosphere, 0)} / ${fixed(message.stageDeltaVVacuum, 0)} m/s`,
-      '总 Δv · ATM / VAC': `${fixed(message.totalDeltaVAtmosphere, 0)} / ${fixed(message.totalDeltaVVacuum, 0)} m/s`,
-      '当前油门剩余': duration(message.stageTimeCurrentThrottle), '满油门剩余': duration(message.stageTimeFullThrottle),
-      '悬停剩余': duration(message.stageTimeHover), '大气阻力加速度': `${fixed(message.atmosphericDrag, 2)} m/s²`,
-      '终端速度': `${fixed(message.terminalVelocity, 0)} m/s`, '乘员容量': fixed(message.crewCapacity, 0),
-      '当前乘员': fixed(message.crewCount, 0), '干质量': `${fixed(message.dryMass, 3)} t`,
-      '当前质量': `${fixed(message.vesselMass, 3)} t`, '零件数': fixed(message.partCount, 0),
-      '载具成本': finite(message.vesselCost) ? Number(message.vesselCost).toLocaleString('zh-CN', { maximumFractionDigits: 0 }) : '—',
-      '迎角 AoA': `${signed(Number(message.angleOfAttack) || 0)}°`, '侧滑角 Angle of Sideslip': `${signed(Number(message.angleOfSideslip) || 0)}°`,
-      '大气压力': `${fixed(message.staticPressureKpa, 2)} kPa`, '当前 Biome': message.currentBiome || 'N/A',
-      '飞行动压': `${fixed(message.dynamicPressureKpa, 1)} kPa`, '自杀点火倒计时': textOrUnavailable(message.suicideBurnCountdown),
-      '撞击倒计时': textOrUnavailable(message.timeToImpact), '最近交会距离': textOrUnavailable(message.targetClosestApproachDistance),
-      '当前目标距离': textOrUnavailable(message.targetDistance), '航向 Heading': `${fixed(message.heading, 1)}°`
+      'Inclination': `${fixed(message.orbitInclination, 3)}°`, 'Period': duration(message.orbitPeriod),
+      'Orbital speed': `${fixed(message.orbitalSpeed, 0)} m/s`, 'Time to apoapsis': duration(message.timeToApoapsis),
+      'Time to periapsis': duration(message.timeToPeriapsis), 'SOI transition': message.timeToSoiTransition || 'N/A',
+      'Eccentricity': fixed(message.orbitEccentricity, 4), 'Bottom altitude': `${fixed(Number(message.altitudeBottom) / 1000, 2)} km`,
+      'Coordinates': message.coordinates || 'N/A', 'Heading': `${fixed(message.heading, 1)}°`,
+      'Surface gravity': `${fixed(message.surfaceGravity, 2)} m/s²`, 'Surface speed': `${fixed(message.surfaceSpeed, 0)} m/s`,
+      'Vertical speed': `${finite(message.verticalSpeed) && Number(message.verticalSpeed) >= 0 ? '+' : ''}${fixed(message.verticalSpeed, 1)} m/s`,
+      'Horizontal surface speed': `${fixed(message.horizontalSurfaceSpeed, 0)} m/s`, 'Maximum acceleration': `${fixed(message.maximumAcceleration, 2)} m/s²`,
+      'Thrust acceleration': `${fixed(message.currentAcceleration, 2)} m/s²`, 'Maximum thrust': `${fixed(Number(message.maximumThrust) / 1000, 2)} MN`,
+      'Current thrust': `${fixed(Number(message.currentThrust) / 1000, 2)} MN`, 'Sea-level TWR': fixed(message.surfaceTwr, 2),
+      'Local TWR': fixed(message.localTwr, 2), 'Current throttle TWR': fixed(message.throttleTwr, 2),
+      'Current G-force': `${fixed(message.geeForce, 2)} g`, 'Stage Δv · ATM / VAC': `${fixed(message.stageDeltaVAtmosphere, 0)} / ${fixed(message.stageDeltaVVacuum, 0)} m/s`,
+      'Total Δv · ATM / VAC': `${fixed(message.totalDeltaVAtmosphere, 0)} / ${fixed(message.totalDeltaVVacuum, 0)} m/s`,
+      'Time at current throttle': duration(message.stageTimeCurrentThrottle), 'Time at full throttle': duration(message.stageTimeFullThrottle),
+      'Hover time remaining': duration(message.stageTimeHover), 'Drag acceleration': `${fixed(message.atmosphericDrag, 2)} m/s²`,
+      'Terminal velocity': `${fixed(message.terminalVelocity, 0)} m/s`, 'Crew capacity': fixed(message.crewCapacity, 0),
+      'Current crew': fixed(message.crewCount, 0), 'Dry mass': `${fixed(message.dryMass, 3)} t`,
+      'Current mass': `${fixed(message.vesselMass, 3)} t`, 'Part count': fixed(message.partCount, 0),
+      'Vessel cost': finite(message.vesselCost) ? Number(message.vesselCost).toLocaleString(uiLocale(), { maximumFractionDigits: 0 }) : '—',
+      'Angle of attack': `${signed(Number(message.angleOfAttack) || 0)}°`, 'Angle of sideslip': `${signed(Number(message.angleOfSideslip) || 0)}°`,
+      'Atmospheric pressure': `${fixed(message.staticPressureKpa, 2)} kPa`, 'Current biome': message.currentBiome || 'N/A',
+      'Dynamic pressure': `${fixed(message.dynamicPressureKpa, 1)} kPa`, 'Suicide burn countdown': textOrUnavailable(message.suicideBurnCountdown),
+      'Time to impact': textOrUnavailable(message.timeToImpact), 'Closest approach': textOrUnavailable(message.targetClosestApproachDistance),
+      'Current target distance': textOrUnavailable(message.targetDistance), 'Heading': `${fixed(message.heading, 1)}°`
     };
     Object.entries(map).forEach(([label, value]) => setRows(label, value));
     $('#currentThrust').textContent = fixed(Number(message.currentThrust) / 1000, 2);
     $('#localTwr').textContent = fixed(message.localTwr, 2);
-    $('#maximumThrust').textContent = `最大 ${fixed(Number(message.maximumThrust) / 1000, 2)} MN`;
-    $('#throttleTwr').textContent = `油门 TWR ${fixed(message.throttleTwr, 2)}`;
+    $('#maximumThrust').textContent = `Maximum ${fixed(Number(message.maximumThrust) / 1000, 2)} MN`;
+    $('#throttleTwr').textContent = `Throttle TWR ${fixed(message.throttleTwr, 2)}`;
     $('#totalDeltaV').textContent = `${fixed(message.totalDeltaVVacuum, 0)} m/s`;
     $('#stageDeltaV').textContent = `STAGE ${fixed(message.stageDeltaVVacuum, 0)} m/s`;
     const orbitSummary = $('.fp-row-wide .orbit-summary-values');
     if (orbitSummary && message.currentOrbit) orbitSummary.title = message.currentOrbit;
     renderOrbitSummaries(state.regularSample);
-    $('#flightPanelState').textContent = message.vesselId ? '数据正常' : '等待活动载具';
-    $('#flightPanelRate').textContent = 'FAST 实时 · REGULAR 实时 · MECHJEB 实时';
+    $('#flightPanelState').textContent = message.vesselId ? 'Data ready' : 'Waiting for active vessel';
+    $('#flightPanelRate').textContent = 'FAST Live · REGULAR live · MECHJEB live';
     const summary = $$('.fp-summary > div');
     const summaryValues = [
       [message.verticalSpeed, 1], [message.surfaceSpeed, 0], [state.currentSample?.data.altitude / 1000, 2],
@@ -369,7 +388,7 @@
       let cursor = entry;
       while (cursor && !visible.has(cursor.id)) { visible.add(cursor.id); cursor = byId.get(cursor.parentId); }
     });
-    const typeLabels = { body: '天体', vessel: '载具', dockingPort: '对接口', other: '目标' };
+    const typeLabels = { body: 'Body', vessel: 'Vessel', dockingPort: 'Docking ports', other: 'Target' };
     const renderBranch = (entry, depth, visiting = new Set()) => {
       if (visiting.has(entry.id) || (query && !visible.has(entry.id))) return '';
       const nextVisiting = new Set(visiting); nextVisiting.add(entry.id);
@@ -378,10 +397,10 @@
       const selected = entry.id === state.selectedTargetId;
       const current = entry.name === state.lastAutomation?.targetName && entry.kind === state.lastAutomation?.targetKind;
       const childMarkup = childEntries.map(child => renderBranch(child, depth + 1, nextVisiting)).join('');
-      return `<div class="target-branch" style="--depth:${depth}"><button class="target-node${selected ? ' is-selected' : ''}${current ? ' is-current' : ''}" data-target-id="${escapeHtml(entry.id)}"><span class="twisty">${childEntries.length ? (expanded ? '▾' : '▸') : '·'}</span><span class="target-node-copy"><b>${escapeHtml(entry.name || entry.id)}</b><small>${escapeHtml(typeLabels[entry.kind] || entry.kind)}${entry.bodyName ? ` · ${escapeHtml(entry.bodyName)}` : ''}</small></span><em>${current ? 'CURRENT' : ''}</em></button>${childEntries.length ? `<div class="target-children"${expanded ? '' : ' hidden'}>${childMarkup}</div>` : ''}</div>`;
+      return `<div class="target-branch" style="--depth:${depth}"><button class="target-node${selected ? ' is-selected' : ''}${current ? ' is-current' : ''}" data-target-id="${escapeHtml(entry.id)}"><span class="twisty">${childEntries.length ? (expanded ? '▾' : '▸') : '·'}</span><span class="target-node-copy"><b data-l10n-skip>${escapeHtml(entry.name || entry.id)}</b><small>${escapeHtml(typeLabels[entry.kind] || entry.kind)}${entry.bodyName ? ` · ${escapeHtml(entry.bodyName)}` : ''}</small></span><em>${current ? 'CURRENT' : ''}</em></button>${childEntries.length ? `<div class="target-children"${expanded ? '' : ' hidden'}>${childMarkup}</div>` : ''}</div>`;
     };
     const roots = children.get('__root__') || [];
-    $('#targetTree').innerHTML = roots.map(entry => renderBranch(entry, 0)).join('') || '<p class="target-empty">没有匹配的目标</p>';
+    $('#targetTree').innerHTML = roots.map(entry => renderBranch(entry, 0)).join('') || '<p class=\"target-empty\">No matching targets</p>';
     $$('.target-node').forEach(button => button.addEventListener('click', () => {
       const id = button.dataset.targetId;
       const hasChildren = (children.get(id) || []).length > 0;
@@ -394,10 +413,10 @@
 
   function renderSelectedTarget() {
     const entry = state.targetCatalog.find(item => item.id === state.selectedTargetId);
-    const labels = { body: '天体', vessel: '载具', dockingPort: '对接口', other: '目标' };
-    $('#targetSelectedName').textContent = entry?.name || '请选择目标';
-    $('#targetSelectedType').textContent = entry ? labels[entry.kind] || entry.kind : '天体 / 载具 / 对接口';
-    $('#targetParentBody').textContent = entry?.bodyName || '—';
+    const labels = { body: 'Body', vessel: 'Vessel', dockingPort: 'Docking ports', other: 'Target' };
+    userText($('#targetSelectedName'), entry?.name, 'Select a target');
+    $('#targetSelectedType').textContent = entry ? labels[entry.kind] || entry.kind : 'Body / vessel / docking port';
+    userText($('#targetParentBody'), entry?.bodyName);
     $('#targetKindBadge').textContent = entry ? String(entry.kind).toUpperCase() : 'NO TARGET';
     $('#applyTarget').disabled = !entry;
   }
@@ -418,8 +437,8 @@
       renderSelectedTarget();
     }
     $('#targetCatalogCount').textContent = `${catalog.length} TARGETS`;
-    $('#targetCurrentName').textContent = message.targetName || '未选择';
-    const meters = value => Number(value) > 0 ? `${Number(value).toLocaleString('zh-CN', { maximumFractionDigits: 1 })} m` : '—';
+    userText($('#targetCurrentName'), message.targetName, 'Not selected');
+    const meters = value => Number(value) > 0 ? `${Number(value).toLocaleString(uiLocale(), { maximumFractionDigits: 1 })} m` : '—';
     $('#targetDistance').textContent = meters(message.targetDistance);
     $('#targetRelativeSpeed').textContent = Number(message.targetRelativeSpeed) >= 0 && message.targetName ? `${Number(message.targetRelativeSpeed).toFixed(2)} m/s` : '—';
     $('#targetApoapsis').textContent = Number(message.targetOrbitApoapsis) ? `${(Number(message.targetOrbitApoapsis) / 1000).toFixed(1)} km` : '—';
@@ -433,9 +452,9 @@
     syncThrottleLock(message);
     renderFlightEnvelope(message);
     renderTrajectoryPrediction(message.trajectory || {});
-    const target = message.targetName || '未选择目标';
+    const target = message.targetName || 'No target selected';
     const targetChip = $('.planner-status .mode-chip');
-    if (targetChip) targetChip.innerHTML = `<i></i> 目标：${escapeHtml(target)}`;
+    if (targetChip) targetChip.innerHTML = `<i></i> Target:${escapeHtml(target)}`;
     const nodeCount = $('.planner-status > b');
     const maneuverNodeCount = Number(message.maneuverNodeCount || 0);
     if (nodeCount) nodeCount.textContent = `${maneuverNodeCount} NODES`;
@@ -448,34 +467,34 @@
       const nodes = Array.isArray(message.maneuverNodes) ? message.maneuverNodes : [];
       nodeQueueEntries.innerHTML = nodes.map((node, index) => {
         const countdown = Math.max(0, Number(node.ut || 0) - Number(state.regularSample?.ut || 0));
-        return `<div class="node-entry"><b>${String(index + 1).padStart(2, '0')}</b><p><span>${index === 0 ? '下一个 KSP 机动节点' : 'KSP 机动节点'}</span><small>UT ${Number(node.ut || 0).toFixed(1)} · Δv ${Number(node.deltaV || 0).toFixed(1)} m/s</small></p><em>T− ${formatDuration(countdown)}</em></div>`;
+        return `<div class="node-entry"><b>${String(index + 1).padStart(2, '0')}</b><p><span>${index === 0 ? 'Next KSP maneuver node' : 'KSP Maneuver node'}</span><small>UT ${Number(node.ut || 0).toFixed(1)} · Δv ${Number(node.deltaV || 0).toFixed(1)} m/s</small></p><em>T− ${formatDuration(countdown)}</em></div>`;
       }).join('');
     }
     if (maneuverNodeCount > 0) {
       const countdown = Math.max(0, Number(message.nextNodeUt || 0) - Number(state.regularSample?.ut || 0));
       $('#nodeDv').textContent = `${Number(message.nextNodeDeltaV || 0).toFixed(1)} m/s`;
-      $('#plannedOrbit').textContent = 'KSP 机动节点已创建';
-      $('#plannedBurn').textContent = message.nodeExecutorEnabled ? '执行中' : '等待执行';
+      $('#plannedOrbit').textContent = 'KSP Maneuver node created';
+      $('#plannedBurn').textContent = message.nodeExecutorEnabled ? 'Executing' : 'Awaiting execution';
       $('#plannedTime').textContent = `T− ${formatDuration(countdown)}`;
       $('#plannerNodeMapLabel').textContent = `NODE 01 · T− ${formatDuration(countdown)}`;
     } else {
-      $('#nodeDv').textContent = '等待解算';
-      $('#plannedOrbit').textContent = '当前没有 KSP 机动节点';
+      $('#nodeDv').textContent = 'Waiting for solution';
+      $('#plannedOrbit').textContent = 'No KSP maneuver nodes';
       $('#plannedBurn').textContent = '—';
       $('#plannedTime').textContent = '—';
-      $('#plannerNodeMapLabel').textContent = '等待 KSP 节点';
+      $('#plannerNodeMapLabel').textContent = 'Waiting for KSP node';
     }
     const autopilot = $('.autopilot-state');
     const modes = [];
-    if (message.ascentEnabled) modes.push('自动发射');
-    if (message.landingEnabled) modes.push(message.landingAtTarget ? '目标着陆' : '自动着陆');
+    if (message.ascentEnabled) modes.push('Ascent guidance');
+    if (message.landingEnabled) modes.push(message.landingAtTarget ? 'Targeted landing' : 'Landing guidance');
     if (message.smartAssEnabled && message.smartAssTarget !== 'OFF') modes.push(`Smart A.S.S. / ${message.smartAssTarget || message.smartAssMode || 'ACTIVE'}`);
     const smartTargetLabels = {
-      OFF: '关闭', KILLROT: '姿态稳定', NODE: '节点', SURFACE: '地面', PROGRADE: '顺向', RETROGRADE: '逆向',
-      NORMAL_PLUS: '法向 +', NORMAL_MINUS: '法向 −', RADIAL_PLUS: '径向外', RADIAL_MINUS: '径向内',
-      RELATIVE_PLUS: '相对速度 +', RELATIVE_MINUS: '相对速度 −', TARGET_PLUS: '目标 +', TARGET_MINUS: '目标 −',
-      PARALLEL_PLUS: '正轨道平面', PARALLEL_MINUS: '反轨道平面', SURFACE_PROGRADE: '地速 +',
-      SURFACE_RETROGRADE: '地速 −', HORIZONTAL_PLUS: '水平速度 +', HORIZONTAL_MINUS: '水平速度 −', VERTICAL_PLUS: '上'
+      OFF: 'Off', KILLROT: 'Kill rotation', NODE: 'Nodes', SURFACE: 'Surface', PROGRADE: 'Prograde', RETROGRADE: 'Retrograde',
+      NORMAL_PLUS: 'Normal +', NORMAL_MINUS: 'Normal −', RADIAL_PLUS: 'Radial out', RADIAL_MINUS: 'Radial in',
+      RELATIVE_PLUS: 'Relative velocity +', RELATIVE_MINUS: 'Relative velocity −', TARGET_PLUS: 'Target +', TARGET_MINUS: 'Target −',
+      PARALLEL_PLUS: 'Parallel +', PARALLEL_MINUS: 'Parallel −', SURFACE_PROGRADE: 'Surface prograde',
+      SURFACE_RETROGRADE: 'Surface retrograde', HORIZONTAL_PLUS: 'Horizontal +', HORIZONTAL_MINUS: 'Horizontal −', VERTICAL_PLUS: 'Up'
     };
     state.orbitGeometry = message.orbitGeometry || null;
     captureAscentSpatialHistory(message.vesselId, state.orbitGeometry);
@@ -496,11 +515,15 @@
       syncSmartAssOffsets(true);
     }
     if (document.activeElement !== $('.smartass-disable input')) $('.smartass-disable input').checked = Boolean(message.smartAssAutoDisable);
-    if (message.rendezvousEnabled) modes.push('自动交汇');
-    if (message.dockingEnabled) modes.push('自动对接');
-    const active = modes.length ? modes.join(' + ') : '当前未接管';
+    if (message.rendezvousEnabled) modes.push('Rendezvous autopilot');
+    if (message.dockingEnabled) modes.push('Docking autopilot');
+    const active = modes.length ? modes.map(mode => {
+      if (!mode.startsWith('Smart A.S.S. / ')) return `<span>${escapeHtml(mode)}</span>`;
+      const target = message.smartAssTarget || message.smartAssMode || 'ACTIVE';
+      return `Smart A.S.S. / <span>${escapeHtml(smartTargetLabels[target] || target)}</span>`;
+    }).join(' + ') : 'Not engaged';
     if (autopilot) {
-      autopilot.querySelector('b').textContent = message.mechJebAvailable ? active : 'MechJeb 不可用';
+      autopilot.querySelector('b').innerHTML = message.mechJebAvailable ? active : 'MechJeb Unavailable';
       autopilot.querySelector('small').textContent = modes.length ? 'MECHJEB CONTROL ACTIVE' : 'MANUAL CONTROL';
       autopilot.classList.toggle('is-active', modes.length > 0);
     }
@@ -511,12 +534,12 @@
     const ascentTimed = Boolean(message.ascentTimedLaunch);
     const ascentEnabled = Boolean(message.ascentEnabled);
     const launchModeLabels = {
-      IMMEDIATE: '立即发射', COUNTDOWN: '手动倒计时', TARGET_PLANE: '发射至目标轨道面',
-      TARGET_LAN: '发射至目标 LAN', RENDEZVOUS: '发射至交会', MANUAL_LAN: '手动 LAN（游戏内 MJ）'
+      IMMEDIATE: 'Launch now', COUNTDOWN: 'Manual countdown', TARGET_PLANE: 'Launch into target plane',
+      TARGET_LAN: 'Launch to target LAN', RENDEZVOUS: 'Launch to rendezvous', MANUAL_LAN: 'Manual LAN (in-game MJ)'
     };
     const ascentLaunchMode = String(message.ascentLaunchMode || 'IMMEDIATE').toUpperCase();
     $('#ascentStateChip').textContent = ascentEnabled ? (ascentTimed ? 'COUNTDOWN' : 'ACTIVE') : 'STANDBY';
-    $('#ascentStatus').textContent = message.mechJebAvailable ? (message.ascentStatus || (ascentEnabled ? '上升制导已接管' : '等待启动')) : 'MechJeb 不可用';
+    $('#ascentStatus').textContent = message.mechJebAvailable ? (message.ascentStatus || (ascentEnabled ? 'Ascent guidance engaged' : 'Waiting to start')) : 'MechJeb Unavailable';
     const ascentApoapsisKm = Number(message.ascentPvgDesiredApoapsis || 0) / 1000;
     if (state.ascentDraft) {
       renderAscentDraft();
@@ -541,16 +564,17 @@
         pvgAttachAltitudeKm: Number(message.ascentPvgDesiredAttachAltitude || 0) / 1000
       });
     }
-    $('#ascentTMinus').textContent = ascentTimed ? `T− ${formatDuration(Math.max(0, Number(message.ascentTimeToLaunch || 0)))}` : (ascentEnabled ? '飞行中' : '立即发射');
+    $('#ascentTMinus').textContent = ascentTimed ? `T− ${formatDuration(Math.max(0, Number(message.ascentTimeToLaunch || 0)))}` : (ascentEnabled ? 'In flight' : 'Launch now');
     $('#ascentReadoutLaunchMode').textContent = launchModeLabels[ascentLaunchMode] || ascentLaunchMode;
     const launchTargetState = $('#ascentLaunchTargetState');
     launchTargetState.classList.toggle('is-ready', Boolean(message.ascentLaunchTargetAvailable));
-    launchTargetState.querySelector('b').textContent = message.ascentLaunchTargetAvailable ? (message.ascentLaunchTargetName || '目标轨道可用') : '未选择有效目标';
-    launchTargetState.querySelector('small').textContent = message.ascentLaunchTargetAvailable ? '目标绕当前发射天体运行 · MJ 可计算窗口' : '请先在目标页面选择绕当前天体运行的目标';
     if (!state.ascentDraft && message.ascentPath) {
       $('#ascentOrbitAltitude').value = ascentAltitudeKm.toFixed(1);
       $('#ascentInclination').value = ascentInclination.toFixed(1);
       $('#ascentPath').value = ascentPath;
+    userText(launchTargetState.querySelector('b'), message.ascentLaunchTargetAvailable ? message.ascentLaunchTargetName : null,
+      message.ascentLaunchTargetAvailable ? 'Target orbit available' : 'No valid target selected');
+    launchTargetState.querySelector('small').textContent = message.ascentLaunchTargetAvailable ? 'Target orbits the launch body · MJ can compute a window' : 'Select a target orbiting the current body on the Target page first.';
       const launchModeOption = Array.from($('#ascentLaunchMode').options).find(option => option.value === ascentLaunchMode);
       if (launchModeOption) $('#ascentLaunchMode').value = ascentLaunchMode;
       $('#ascentLaunchPhaseAngle').value = Number(message.ascentLaunchPhaseAngle || 0).toFixed(1);
@@ -599,27 +623,27 @@
     [$('#autoWarpPlanner'), $('#autoWarpAutopilot')].forEach(input => {
       if (input && document.activeElement !== input) input.checked = Boolean(message.autoWarp);
     });
-    $('#rendezvousTargetName').textContent = message.targetName || '未选择';
+    userText($('#rendezvousTargetName'), message.targetName, 'Not selected');
     $('#rendezvousTargetDistance').textContent = Number(message.targetDistance) > 0 ? `${Number(message.targetDistance).toFixed(1)} m` : '—';
     $('#rendezvousRelativeSpeed').textContent = message.targetName ? `${Number(message.targetRelativeSpeed || 0).toFixed(2)} m/s` : '—';
     $('#rendezvousReadiness').textContent = message.targetName ? (message.rendezvousEnabled ? 'ACTIVE' : 'READY') : 'NO TARGET';
-    $('#rendezvousStatus').textContent = message.rendezvousStatus || (message.rendezvousEnabled ? '自动交汇运行中' : '等待启动');
+    $('#rendezvousStatus').textContent = message.rendezvousStatus || (message.rendezvousEnabled ? 'Rendezvous autopilot running' : 'Waiting to start');
     if (document.activeElement !== $('#rendezvousDistance')) $('#rendezvousDistance').value = Number(message.rendezvousDesiredDistance || 0).toFixed(1);
     if (document.activeElement !== $('#rendezvousPhasingOrbits')) $('#rendezvousPhasingOrbits').value = Number(message.rendezvousMaxPhasingOrbits || 0).toFixed(1);
     if (document.activeElement !== $('#rendezvousClosingSpeed')) $('#rendezvousClosingSpeed').value = Number(message.rendezvousMaxClosingSpeed || 0).toFixed(2);
     const landingStatus = $('[data-auto-view="landing"] .guidance-status');
     if (landingStatus) {
-      landingStatus.querySelector('b').textContent = message.landingStatus || (message.landingEnabled ? '自动着陆正在控制' : '等待启动');
+      landingStatus.querySelector('b').textContent = message.landingStatus || (message.landingEnabled ? 'Landing autopilot engaged' : 'Waiting to start');
       landingStatus.querySelector('small').textContent = message.landingPredictionSimulationRunning
-        ? 'MJ 正在计算着陆预测' : (message.landingPredictionReady ? '着陆预测可用' : '等待 MJ 着陆预测');
+        ? 'MJ Computing landing prediction' : (message.landingPredictionReady ? 'Landing prediction available' : 'Waiting for MJ landing prediction');
     }
-    const landingOutcomeLabels = { LANDED: '预计着陆', AEROBRAKED: '预计气动捕获', TIMED_OUT: '模拟超时', NO_REENTRY: '轨道不会再入', ERROR: '模拟错误' };
+    const landingOutcomeLabels = { LANDED: 'Landing predicted', AEROBRAKED: 'Aerocapture predicted', TIMED_OUT: 'Simulation timeout', NO_REENTRY: 'Orbit does not reenter', ERROR: 'Simulation error' };
     const landingOutcome = String(message.landingPredictionOutcome || '').toUpperCase();
     $('#landingPredictionState').textContent = message.landingPredictionSimulationRunning
-      ? '计算中' : (landingOutcomeLabels[landingOutcome] || (message.landingPredictionReady ? '预测可用' : '等待'));
+      ? 'Computing' : (landingOutcomeLabels[landingOutcome] || (message.landingPredictionReady ? 'Prediction available' : 'Waiting'));
     $('#landingAutopilotStep').textContent = message.landingStep || 'N/A';
     const descentMode = message.landingDescentMode || 'N/A';
-    $('#landingDescentMode').textContent = message.landingUsesAtmosphere ? `${descentMode}（气动）` : descentMode;
+    $('#landingDescentMode').textContent = message.landingUsesAtmosphere ? `${descentMode}（aerodynamic)` : descentMode;
     $('#landingTimeToLand').textContent = message.landingPredictionReady ? formatDuration(Number(message.landingPredictionTimeToLand || 0)) : '—';
     $('#landingPredictedCoordinates').textContent = message.landingPredictionReady
       ? `${Number(message.landingPredictedLatitude || 0).toFixed(4)}°, ${Number(message.landingPredictedLongitude || 0).toFixed(4)}°` : '—';
@@ -651,17 +675,18 @@
     syncLandingCheck('#landingWorldTrajectory', message.landingWorldTrajectory);
     syncLandingCheck('#landingCameraTrajectory', message.landingCameraTrajectory);
     updateLandingOptionAvailability();
-    $('#landingTargetBody').textContent = message.targetBody || '未设置';
-    $('#landingTargetName').textContent = message.positionTargetExists ? (message.targetName || '地面坐标目标') : '尚无地面目标';
+    $('#landingTargetBody').textContent = message.targetBody || 'Not set';
+    userText($('#landingTargetName'), message.positionTargetExists ? message.targetName : null,
+      message.positionTargetExists ? 'Surface coordinate target' : 'No surface target');
     $('#landingTargetCoordinates').textContent = message.positionTargetExists
       ? `${Number(message.targetLatitude || 0).toFixed(4)}°, ${Number(message.targetLongitude || 0).toFixed(4)}°`
-      : '输入坐标后应用';
+      : 'Enter coordinates and apply';
     if (message.positionTargetExists && document.activeElement !== $('#landingLatitude')) $('#landingLatitude').value = `${Number(message.targetLatitude || 0).toFixed(4)}°`;
     if (message.positionTargetExists && document.activeElement !== $('#landingLongitude')) $('#landingLongitude').value = `${Number(message.targetLongitude || 0).toFixed(4)}°`;
     const dockingStatus = $('[data-auto-view="docking"] .guidance-status');
     if (dockingStatus) {
-      dockingStatus.querySelector('b').textContent = message.dockingStatus || (message.mechJebAvailable ? '等待目标对接口' : 'MechJeb 不可用');
-      dockingStatus.querySelector('small').textContent = message.dockingStep ? `步骤：${message.dockingStep}` : '目标和控制对接口必须有效';
+      dockingStatus.querySelector('b').textContent = message.dockingStatus || (message.mechJebAvailable ? 'Waiting for target docking port' : 'MechJeb Unavailable');
+      dockingStatus.querySelector('small').textContent = message.dockingStep ? `Step:${message.dockingStep}` : 'Valid target and control ports required';
     }
     const dockingAxisAvailable = Boolean(message.dockingAxisAvailable);
     const dockCraftMarker = $('#dockCraftMarker');
@@ -683,13 +708,13 @@
       $('#dockErrorY').textContent = signedMeters(axisY);
       $('#dockAxialDistance').textContent = signedMeters(axial);
       $('#dockLateralDistance').textContent = `${lateral.toFixed(2)} m`;
-      $('#dockReticleError').textContent = `${lateral.toFixed(2)} m 横向 · 视窗 ±${displayRange.toFixed(1)} m`;
+      $('#dockReticleError').textContent = `${lateral.toFixed(2)} m Lateral · viewport ±${displayRange.toFixed(1)} m`;
     } else {
       dockCraftMarker.hidden = true;
       ['#dockErrorX', '#dockErrorY', '#dockAxialDistance', '#dockLateralDistance'].forEach(selector => { $(selector).textContent = '—'; });
-      $('#dockReticleError').textContent = message.targetName ? '当前目标不是有效对接口' : '等待有效对接口目标';
+      $('#dockReticleError').textContent = message.targetName ? 'Current target is not a valid docking port' : 'Waiting for a valid docking port target';
     }
-    $('#dockingTargetName').textContent = message.targetName || '未选择';
+    userText($('#dockingTargetName'), message.targetName, 'Not selected');
     $('#dockingReadiness').textContent = dockingAxisAvailable ? (message.dockingEnabled ? 'ACTIVE' : 'READY') : 'NO DOCKING PORT';
     const syncDockingNumber = (selector, value, digits) => {
       const input = $(selector);
@@ -714,10 +739,10 @@
       sasHeader.classList.toggle('is-on', Boolean(message.sas));
     }
     const systemStates = [
-      [message.sas, message.sas ? '稳定辅助' : '已关闭'], [message.rcs, message.rcs ? '启用' : '关闭'],
-      [message.gear, message.gear ? '已放下' : '已收起'], [message.brakes, message.brakes ? '已锁定' : '释放'],
-      [message.lights, message.lights ? '已开启' : '已关闭'], [message.solarPanels === 'extended', message.solarPanels || 'unavailable'],
-      [message.antennas === 'extended', message.antennas || 'unavailable'], [message.autoStage, message.autoStage ? 'MechJeb 管理' : '已关闭']
+      [message.sas, message.sas ? 'Stability assist' : 'Off'], [message.rcs, message.rcs ? 'Enable' : 'Off'],
+      [message.gear, message.gear ? 'Deployed' : 'Retracted'], [message.brakes, message.brakes ? 'Locked' : 'Release'],
+      [message.lights, message.lights ? 'On' : 'Off'], [message.solarPanels === 'extended', deploymentLabel(message.solarPanels)],
+      [message.antennas === 'extended', deploymentLabel(message.antennas)], [message.autoStage, message.autoStage ? 'Managed by MechJeb' : 'Off']
     ];
     $$('.system-switch').forEach((button, index) => {
       const value = systemStates[index];
@@ -727,7 +752,7 @@
     });
     $$('.action-pad button').forEach((button, index) => button.classList.toggle('is-on', (Number(message.actionGroupMask || 0) & (1 << index)) !== 0));
     const operationStates = {
-      autostage: [Boolean(message.autoStage), message.autoStage ? 'MechJeb 管理 · 启用' : '已关闭'],
+      autostage: [Boolean(message.autoStage), message.autoStage ? 'Managed by MechJeb · Enable' : 'Off'],
       solar: [message.solarPanels === 'extended', deploymentLabel(message.solarPanels)],
       antenna: [message.antennas === 'extended', deploymentLabel(message.antennas)]
     };
@@ -741,7 +766,7 @@
     const solver = $('.solver-state');
     if (solver) {
       const status = message.porkchopStatus || 'idle';
-      const labels = { idle: '等待解算', computing: '正在解算', ready: '解算完成', failed: '解算失败' };
+      const labels = { idle: 'Waiting for solution', computing: 'Solving', ready: 'Solution ready', failed: 'Solver failed' };
       solver.querySelector('b').textContent = labels[status] || status;
       solver.querySelector('small').textContent = status === 'computing' ? `${Number(message.porkchopProgress || 0)}%` : (status === 'ready' ? 'PORKCHOP MATRIX READY' : 'ALLGRAPH TRANSFER CALCULATOR');
       if (status === 'ready' && Number(message.porkchopRevision) > state.porkchopRevision) fetchPorkchopResult(Number(message.porkchopRevision));
@@ -750,24 +775,24 @@
 
   function renderFlightEnvelope(message) {
     const available = Boolean(message.mechJebAvailable && message.envelopeAvailable);
-    $('#envelopeState').textContent = available ? '推力控制器在线' : 'MJ 推力控制器不可用';
-    $('#envelopeLimiterState').textContent = available ? '限制参数与游戏内 MJ 共用' : '需要活动载具与 MechJeb';
+    $('#envelopeState').textContent = available ? 'Thrust controller online' : 'MJ thrust controllerUnavailable';
+    $('#envelopeLimiterState').textContent = available ? 'Limits are shared with in-game MJ' : 'Requires an active vessel and MechJeb';
     $('.envelope-state')?.classList.toggle('is-active', available);
     const activeLimits = [];
-    if (message.envelopeDynamicPressure) activeLimits.push('最大动压');
-    if (message.envelopeAcceleration) activeLimits.push('最大加速度');
-    if (message.envelopeMaximumThrottle) activeLimits.push('最大油门');
-    if (message.envelopeMinimumThrottle) activeLimits.push('最小油门');
-    if (message.envelopePreventOverheat) activeLimits.push('热保护');
-    if (message.envelopePreventFlameout) activeLimits.push('防熄火');
-    $('#envelopePrimaryConstraint').textContent = activeLimits.length ? activeLimits.join(' / ') : '无活动限制';
+    if (message.envelopeDynamicPressure) activeLimits.push('Maximum dynamic pressure');
+    if (message.envelopeAcceleration) activeLimits.push('Maximum acceleration');
+    if (message.envelopeMaximumThrottle) activeLimits.push('Maximum throttle');
+    if (message.envelopeMinimumThrottle) activeLimits.push('Minimum throttle');
+    if (message.envelopePreventOverheat) activeLimits.push('Thermal protection');
+    if (message.envelopePreventFlameout) activeLimits.push('Flameout prevention');
+    $('#envelopePrimaryConstraint').textContent = activeLimits.length ? activeLimits.join(' / ') : 'No active limit';
     const maxQ = Number(message.envelopeMaximumDynamicPressure || 0) / 1000;
     const maxAcceleration = Number(message.envelopeMaximumAcceleration || 0);
     const minThrottle = Number(message.envelopeMinimumThrottleValue || 0) * 100;
     const maxThrottle = Number(message.envelopeMaximumThrottleValue || 0) * 100;
-    $('#envelopeQLimitReadout').textContent = message.envelopeDynamicPressure ? `限制 ${maxQ.toFixed(1)} kPa` : '限制关闭';
-    $('#envelopeAccelerationLimitReadout').textContent = message.envelopeAcceleration ? `限制 ${maxAcceleration.toFixed(1)} m/s²` : '限制关闭';
-    $('#envelopeThrottleBandReadout').textContent = `允许 ${message.envelopeMinimumThrottle ? minThrottle.toFixed(0) : '0'}–${message.envelopeMaximumThrottle ? maxThrottle.toFixed(0) : '100'}%`;
+    $('#envelopeQLimitReadout').textContent = message.envelopeDynamicPressure ? `Limit ${maxQ.toFixed(1)} kPa` : 'Limit disabled';
+    $('#envelopeAccelerationLimitReadout').textContent = message.envelopeAcceleration ? `Limit ${maxAcceleration.toFixed(1)} m/s²` : 'Limit disabled';
+    $('#envelopeThrottleBandReadout').textContent = `Allowed ${message.envelopeMinimumThrottle ? minThrottle.toFixed(0) : '0'}–${message.envelopeMaximumThrottle ? maxThrottle.toFixed(0) : '100'}%`;
     $('#envelopeThrottleFloor').style.left = `${Math.max(0, Math.min(100, message.envelopeMinimumThrottle ? minThrottle : 0))}%`;
     if (!state.envelopeDraft) {
       $('#envelopeLimitQ').checked = Boolean(message.envelopeDynamicPressure);
@@ -808,7 +833,7 @@
     const svg=$('#trajectoryOrbitChart');
     if (!svg) return;
     if(t.surfaceMapVersion !== 1) {
-      svg.innerHTML='<text x="30" y="185" fill="#ffcf73">等待新版 DLL：旧版轨迹坐标与速度口径不正确</text>';
+      svg.innerHTML='<text x=\"30\" y=\"185\" fill=\"#ffcf73\">New DLL required: legacy trajectory coordinates and speed frame are incorrect</text>';
       return;
     }
     const radius=Number(t.bodyRadius), valid=p=>Array.isArray(p)&&p.length>=2&&p.slice(0,2).every(Number.isFinite)&&Math.abs(p[0])<=90;
@@ -816,7 +841,7 @@
     const impact=t.impactAvailable ? [t.impactLatitude,t.impactLongitude] : null;
     const paths=(t.groundPaths || []).map(points=>points.filter(valid));
     const origin=valid(target)?target:valid(impact)?impact:paths.find(p=>p.length)?.[0];
-    if(!origin || !(radius>0)) {svg.innerHTML='<text x="30" y="185" fill="#8ea8ad">等待目标或预测落点坐标</text>';return;}
+    if(!origin || !(radius>0)) {svg.innerHTML='<text x=\"30\" y=\"185\" fill=\"#8ea8ad\">Waiting for target or impact coordinates</text>';return;}
     const project=p=>trajectoryMapPoint(p[0],p[1],origin,radius);
     const projected=paths.map(points=>points.map(project));
     const targetXY=valid(target)?project(target):null, impactXY=valid(impact)?project(impact):null;
@@ -845,22 +870,22 @@
       const [x,y]=screen(p),textY=isTarget?y-15:y+24;
       return `<g stroke="${color}" stroke-width="2" fill="none"><circle cx="${x}" cy="${y}" r="${isTarget?9:5}"/>${isTarget?`<path d="M${x-14} ${y}h28m-14-14v28"/>`:''}</g><text x="${x}" y="${textY}" text-anchor="middle" fill="${color}">${label}</text>`;
     };
-    markup+=marker(targetXY,'目标','#ffcf73',true)+marker(impactXY,'预测落点','#ff7769',false);
+    markup+=marker(targetXY,'Target','#ffcf73',true)+marker(impactXY,'Predicted impact','#ff7769',false);
     const raw=110/scale, power=10**Math.floor(Math.log10(raw)), unit=[5,2,1].find(n=>n*power<=raw)*power;
     const width=unit*scale, distance=unit>=1000?`${unit/1000} km`:`${unit} m`;
     markup+=`<path d="M25 342h${width}m-${width}-4v8m${width}-8v8" stroke="#d6e6e8"/><text x="25" y="365" fill="#d6e6e8">${distance}</text>`;
-    if(!projected.some(p=>p.filter(Boolean).length>1))markup+=`<text x="230" y="365" fill="#ffcf73">${t.impactAvailable?'落点位置可用；预测曲线尚未取得':'等待预测落点与曲线'}</text>`;
+    if(!projected.some(p=>p.filter(Boolean).length>1))markup+=`<text x="230" y="365" fill="#ffcf73">${t.impactAvailable?'Impact available; trajectory samples not yet received':'Waiting for impact and trajectory'}</text>`;
     svg.innerHTML=markup;
   }
 
   function renderTrajectoryPrediction(trajectory) {
-    $('#trajectoryPathStatus').textContent = trajectory.surfaceMapVersion !== 1 ? '需要加载新版 ArmorControl DLL，暂不展示旧版错误口径的落点和速度。'
-      : trajectory.pathStatus || ((trajectory.groundPaths || []).some(p=>p.length>1) ? '已取得预测地面轨迹' : trajectory.impactAvailable ? '落点已取得，暂无曲线采样。' : '等待 Trajectories 预测；持续更新关闭时，非地图视图可能暂停计算。');
+    $('#trajectoryPathStatus').textContent = trajectory.surfaceMapVersion !== 1 ? 'Load the new ArmorControl DLL. Legacy impact coordinates and speeds are hidden because their reference frame is incorrect.'
+      : trajectory.pathStatus || ((trajectory.groundPaths || []).some(p=>p.length>1) ? 'Predicted ground track received' : trajectory.impactAvailable ? 'Impact received; no trajectory samples yet.' : 'Waiting for Trajectories. Computation may pause outside map view if Always Update is off.');
     // Older DLLs used inertial speeds and body-relative positions as world coordinates.
     if (trajectory.surfaceMapVersion !== 1) trajectory = {...trajectory, impactAvailable: false};
     const available = Boolean(trajectory.available);
-    $('#trajectoryState').textContent = available ? `Trajectories ${trajectory.version || ''}`.trim() : 'Trajectories 不可用';
-    $('#trajectoryModel').textContent = available ? `气动模型 ${trajectory.aerodynamicModel || '等待建立'}` : (trajectory.status || '插件未加载');
+    $('#trajectoryState').textContent = available ? `Trajectories ${trajectory.version || ''}`.trim() : 'Trajectories Unavailable';
+    $('#trajectoryModel').textContent = available ? `Aerodynamic model ${trajectory.aerodynamicModel || 'Waiting for initialization'}` : (trajectory.status || 'Plugin not loaded');
     $('.trajectory-state')?.classList.toggle('is-active', available);
     $('#trajectoryImpactStatus').textContent = trajectory.impactAvailable ? 'SOLUTION READY' : 'NO SOLUTION';
     $('#trajectoryTimeToImpact').textContent = trajectory.impactAvailable ? formatDuration(trajectory.timeToImpact) : '—';
@@ -874,8 +899,8 @@
     $('#trajectoryErrors').textContent = available ? String(Number(trajectory.errorCount || 0)) : '—';
     $('#trajectoryTargetReadout').textContent = trajectory.targetAvailable
       ? `${Number(trajectory.targetLatitude).toFixed(5)}°, ${Number(trajectory.targetLongitude).toFixed(5)}° · ${Number(trajectory.targetAltitude).toFixed(0)} m`
-      : '未设置目标';
-    $('#trajectoryMapTarget').textContent = trajectory.targetAvailable ? `${Number(trajectory.targetLatitude).toFixed(5)}°, ${Number(trajectory.targetLongitude).toFixed(5)}°` : '未设置目标';
+      : 'No target set';
+    $('#trajectoryMapTarget').textContent = trajectory.targetAvailable ? `${Number(trajectory.targetLatitude).toFixed(5)}°, ${Number(trajectory.targetLongitude).toFixed(5)}°` : 'No target set';
     $('#trajectoryMissDistance').textContent = trajectory.impactAvailable && trajectory.targetAvailable && Number.isFinite(trajectory.impactTargetDistance) ? `${(trajectory.impactTargetDistance/1000).toFixed(2)} km` : '—';
     // Coordinates remain in the readouts; never place target/impact at a decorative fixed position.
     $('#trajectoryTargetMarker').hidden = true;
@@ -916,12 +941,12 @@
   }
 
   function deploymentLabel(value) {
-    return ({ extended: '已展开', retracted: '已收起', moving: '移动中', mixed: '状态混合', unavailable: '不可用' })[value] || '不可用';
+    return ({ extended: 'Extended', retracted: 'Retracted', moving: 'Moving', mixed: 'Mixed state', unavailable: 'Unavailable' })[value] || 'Unavailable';
   }
 
   function updateEnvelopeAccelerationEquivalent() {
     const acceleration = Number($('#envelopeMaximumAcceleration')?.value || 0);
-    $('#envelopeAccelerationG').textContent = Number.isFinite(acceleration) ? `约 ${(acceleration / 9.80665).toFixed(2)} g` : '请输入有效数值';
+    $('#envelopeAccelerationG').textContent = Number.isFinite(acceleration) ? `About ${(acceleration / 9.80665).toFixed(2)} g` : 'Enter a valid number';
   }
 
   function syncTrajectoryProfileInputs() {
@@ -950,7 +975,7 @@
       renderPorkchopHeatmap(result);
       choosePorkchopCell(Number(result.bestDepartureIndex), Number(result.bestDurationIndex));
     } catch {
-      showToast('Porkchop 矩阵获取失败');
+      showToast('Porkchop Failed to retrieve matrix');
     }
   }
 
@@ -999,7 +1024,7 @@
     const finiteCosts = result.costs.filter(isPorkchopCost).map(Number).sort((a, b) => a - b);
     if (!finiteCosts.length) {
       $('#porkHeatmap').setAttribute('opacity', '0');
-      showToast('Porkchop 解算没有返回有效轨迹');
+      showToast('Porkchop Solver returned no valid trajectory');
       return;
     }
 
@@ -1120,18 +1145,36 @@
     };
     $('#porkDeparture').textContent = `T− ${transferDuration(Math.max(0, departure - now))}`;
     $('#porkDuration').textContent = transferDuration(duration);
-    $('#porkEjection').textContent = '精确解算后生成';
-    $('#porkCapture').textContent = $('#captureBurn').checked ? '已计入成本' : '未计入';
-    $('#porkTotal').textContent = Number.isFinite(cost) ? `${cost.toFixed(0)} m/s` : '无有效解';
+    $('#porkEjection').textContent = 'Generated after exact solving';
+    $('#porkCapture').textContent = $('#captureBurn').checked ? 'Included in cost' : 'Not included';
+    $('#porkTotal').textContent = Number.isFinite(cost) ? `${cost.toFixed(0)} m/s` : 'No valid solution';
   }
 
   function sendCommand(name, parameters = {}, quiet = false) {
-    if (!state.socket || state.socket.readyState !== WebSocket.OPEN || state.connection !== 'live') return false;
+    const serverSetting = name === 'server.language.set' && state.serverCapabilities.has(name);
+    if (!state.socket || state.socket.readyState !== WebSocket.OPEN || (!serverSetting && state.connection !== 'live')) return false;
     const commandId = `${state.clientId || 'client'}-${Date.now()}-${++state.commandSequence}`;
     if (quiet) state.quietCommands.add(commandId);
     state.socket.send(JSON.stringify({ type: 'command', commandId, name, sequence: state.commandSequence, ...parameters }));
     return commandId;
   }
+
+  function updateLanguageControl() {
+    const select = $('#languageSelect');
+    if (!select) return;
+    select.disabled = !state.socket || state.socket.readyState !== WebSocket.OPEN ||
+      !state.serverCapabilities.has('server.language.set') || Boolean(state.languagePendingCommandId);
+  }
+
+  $('#languageSelect').addEventListener('change', event => {
+    const language = event.target.value;
+    // Keep showing the confirmed language until the server saves and broadcasts it.
+    event.target.value = window.ArmorI18n?.locale || 'en-US';
+    if (language !== 'en-US' && language !== 'zh-CN') return;
+    state.languagePendingCommandId = sendCommand('server.language.set', { language }) || null;
+    updateLanguageControl();
+    if (!state.languagePendingCommandId) showToast('Server language change requires a connected, compatible server.');
+  });
 
   async function fetchStructuralData() {
     try {
@@ -1192,30 +1235,30 @@
   }
 
   const recorderSeries = {
-    altitudeAsl: { label: '海平面高度', color: '#6bd1cf', axis: 'left', value: raw => raw / 1000, format: value => `${value.toFixed(2)} km` },
-    altitudeTrue: { label: '真实高度', color: '#85aef2', axis: 'left', value: raw => raw / 1000, format: value => `${value.toFixed(2)} km` },
-    speedSurface: { label: '地表速度', color: '#e8b85f', axis: 'left', value: raw => raw, format: value => `${value.toFixed(0)} m/s` },
-    speedOrbital: { label: '轨道速度', color: '#a98ff3', axis: 'left', value: raw => raw, format: value => `${value.toFixed(0)} m/s` },
-    dynamicPressure: { label: '动压 Q', color: '#ef796f', axis: 'left', value: raw => raw / 1000, format: value => `${value.toFixed(3)} kPa` },
-    angleOfAttack: { label: '迎角 AoA', color: '#5fd39d', axis: 'right', value: raw => raw, format: value => `${signed(value)}°` },
-    angleOfSideslip: { label: '侧滑角 AoS', color: '#f39bce', axis: 'right', value: raw => raw, format: value => `${signed(value)}°` },
-    pitch: { label: '俯仰角', color: '#88c2ff', axis: 'left', value: raw => raw, format: value => `${signed(value)}°` },
-    angleOfDisplacement: { label: '位移角 AoD', color: '#66b8aa', axis: 'left', value: raw => raw, format: value => `${signed(value)}°` },
-    gravityLosses: { label: '重力损失', color: '#e8b85f', axis: 'left', value: raw => raw, format: value => `${value.toFixed(1)} m/s` },
-    dragLosses: { label: '阻力损失', color: '#ef796f', axis: 'left', value: raw => raw, format: value => `${value.toFixed(1)} m/s` },
-    steeringLosses: { label: '转向损失', color: '#b8a5dc', axis: 'left', value: raw => raw, format: value => `${value.toFixed(1)} m/s` },
-    deltaVExpended: { label: '已消耗 Δv', color: '#7fd0e8', axis: 'left', value: raw => raw, format: value => `${value.toFixed(1)} m/s` },
-    mass: { label: '质量', color: '#d7d9c8', axis: 'left', value: raw => raw, format: value => `${value.toFixed(2)} t` },
-    acceleration: { label: 'G 力', color: '#f5e488', axis: 'right', value: raw => raw, format: value => `${value.toFixed(2)} g` }
+    altitudeAsl: { label: 'Altitude ASL', color: '#6bd1cf', axis: 'left', value: raw => raw / 1000, format: value => `${value.toFixed(2)} km` },
+    altitudeTrue: { label: 'True altitude', color: '#85aef2', axis: 'left', value: raw => raw / 1000, format: value => `${value.toFixed(2)} km` },
+    speedSurface: { label: 'Surface speed', color: '#e8b85f', axis: 'left', value: raw => raw, format: value => `${value.toFixed(0)} m/s` },
+    speedOrbital: { label: 'Orbital speed', color: '#a98ff3', axis: 'left', value: raw => raw, format: value => `${value.toFixed(0)} m/s` },
+    dynamicPressure: { label: 'Dynamic pressure Q', color: '#ef796f', axis: 'left', value: raw => raw / 1000, format: value => `${value.toFixed(3)} kPa` },
+    angleOfAttack: { label: 'Angle of attack', color: '#5fd39d', axis: 'right', value: raw => raw, format: value => `${signed(value)}°` },
+    angleOfSideslip: { label: 'Sideslip angle', color: '#f39bce', axis: 'right', value: raw => raw, format: value => `${signed(value)}°` },
+    pitch: { label: 'Pitch angle', color: '#88c2ff', axis: 'left', value: raw => raw, format: value => `${signed(value)}°` },
+    angleOfDisplacement: { label: 'Displacement angle', color: '#66b8aa', axis: 'left', value: raw => raw, format: value => `${signed(value)}°` },
+    gravityLosses: { label: 'Gravity loss', color: '#e8b85f', axis: 'left', value: raw => raw, format: value => `${value.toFixed(1)} m/s` },
+    dragLosses: { label: 'Drag loss', color: '#ef796f', axis: 'left', value: raw => raw, format: value => `${value.toFixed(1)} m/s` },
+    steeringLosses: { label: 'Steering loss', color: '#b8a5dc', axis: 'left', value: raw => raw, format: value => `${value.toFixed(1)} m/s` },
+    deltaVExpended: { label: 'Expended Δv', color: '#7fd0e8', axis: 'left', value: raw => raw, format: value => `${value.toFixed(1)} m/s` },
+    mass: { label: 'Mass', color: '#d7d9c8', axis: 'left', value: raw => raw, format: value => `${value.toFixed(2)} t` },
+    acceleration: { label: 'G-force', color: '#f5e488', axis: 'right', value: raw => raw, format: value => `${value.toFixed(2)} g` }
   };
 
   const recorderGroups = {
-    trajectory: { kicker: 'TRAJECTORY', title: '高度剖面', hint: '海平面高度与真实高度共享同一刻度', fields: ['altitudeAsl', 'altitudeTrue'], left: '高度 / km', leftZero: false },
-    velocity: { kicker: 'VELOCITY', title: '速度剖面', hint: '地表系与轨道系速度直接比较', fields: ['speedSurface', 'speedOrbital'], left: '速度 / m·s⁻¹', leftZero: true },
-    aero: { kicker: 'AERODYNAMICS', title: '气动载荷', hint: '动压使用左轴，气流角使用右轴', fields: ['dynamicPressure', 'angleOfAttack', 'angleOfSideslip'], left: '动压 / kPa', right: '角度 / °', leftZero: true, rightZero: true },
-    attitude: { kicker: 'ATTITUDE', title: '姿态与气流偏差', hint: '俯仰角与位移角使用相同角度刻度', fields: ['pitch', 'angleOfDisplacement'], left: '角度 / °', leftZero: true },
-    losses: { kicker: 'DELTA-V LEDGER', title: 'Δv 损失账本', hint: '累计损失与已消耗 Δv 使用相同速度刻度', fields: ['gravityLosses', 'dragLosses', 'steeringLosses', 'deltaVExpended'], left: '速度 / m·s⁻¹', leftZero: true },
-    vehicle: { kicker: 'VEHICLE STATE', title: '质量与加速度', hint: '质量使用左轴，G 力使用右轴', fields: ['mass', 'acceleration'], left: '质量 / t', right: 'G 力 / g', leftZero: false, rightZero: true }
+    trajectory: { kicker: 'TRAJECTORY', title: 'Altitude profile', hint: 'ASL and true altitude share the same scale', fields: ['altitudeAsl', 'altitudeTrue'], left: 'Altitude / km', leftZero: false },
+    velocity: { kicker: 'VELOCITY', title: 'Speed profile', hint: 'Compare surface and orbital speed directly', fields: ['speedSurface', 'speedOrbital'], left: 'Speed / m·s⁻¹', leftZero: true },
+    aero: { kicker: 'AERODYNAMICS', title: 'Aerodynamic loads', hint: 'Dynamic pressure on left axis; airflow angles on right', fields: ['dynamicPressure', 'angleOfAttack', 'angleOfSideslip'], left: 'Dynamic pressure / kPa', right: 'Angle / °', leftZero: true, rightZero: true },
+    attitude: { kicker: 'ATTITUDE', title: 'Attitude and airflow deviation', hint: 'Pitch and displacement angle share an angular scale', fields: ['pitch', 'angleOfDisplacement'], left: 'Angle / °', leftZero: true },
+    losses: { kicker: 'DELTA-V LEDGER', title: 'Δv Loss budget', hint: 'Accumulated losses and expended Δv share the same speed scale', fields: ['gravityLosses', 'dragLosses', 'steeringLosses', 'deltaVExpended'], left: 'Speed / m·s⁻¹', leftZero: true },
+    vehicle: { kicker: 'VEHICLE STATE', title: 'Mass and acceleration', hint: 'Mass on left axis; G-force on right', fields: ['mass', 'acceleration'], left: 'Mass / t', right: 'G force / g', leftZero: false, rightZero: true }
   };
 
   const recorderPaths = new Map();
@@ -1257,7 +1300,7 @@
 
   function recorderTick(value) {
     const magnitude = Math.abs(value);
-    if (magnitude >= 1000) return Math.round(value).toLocaleString('zh-CN');
+    if (magnitude >= 1000) return Math.round(value).toLocaleString(uiLocale());
     if (magnitude >= 100) return value.toFixed(0);
     if (magnitude >= 10) return value.toFixed(1);
     if (magnitude >= 1) return value.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
@@ -1308,13 +1351,13 @@
     grid.innerHTML = group.fields.map(field => {
       const series = recorderSeries[field];
       const on = !state.recorderHiddenFields.has(field);
-      return `<button class="series-chip${on ? ' is-on' : ''}" data-recorder-field="${field}" style="--series-color:${series.color}"><i></i><span>${series.label}<small>—</small></span><em>${series.axis === 'right' ? '右轴' : '左轴'}</em></button>`;
+      return `<button class="series-chip${on ? ' is-on' : ''}" data-recorder-field="${field}" style="--series-color:${series.color}"><i></i><span>${series.label}<small>—</small></span><em>${series.axis === 'right' ? 'Right axis' : 'Left axis'}</em></button>`;
     }).join('');
     $$('.series-chip', grid).forEach(button => button.addEventListener('click', () => {
       const field = button.dataset.recorderField;
       const visible = group.fields.filter(item => !state.recorderHiddenFields.has(item));
       if (!state.recorderHiddenFields.has(field) && visible.length === 1) {
-        showToast('当前图组至少保留一个通道');
+        showToast('Keep at least one channel visible');
         return;
       }
       if (state.recorderHiddenFields.has(field)) state.recorderHiddenFields.delete(field);
@@ -1324,7 +1367,7 @@
       state.recorderRenderedAt = 0;
     }));
     const visibleCount = group.fields.filter(field => !state.recorderHiddenFields.has(field)).length;
-    $('#toggleAllRecorder').textContent = visibleCount > 1 ? '仅看主通道' : '显示本组全部';
+    $('#toggleAllRecorder').textContent = visibleCount > 1 ? 'Primary channel only' : 'Show all in group';
   }
 
   function updateRecorderSeriesValues(sample) {
@@ -1335,7 +1378,7 @@
       const values = state.recorderSamples.map(item => series.value(Number(item[field]) || 0));
       const minimum = Math.min(...values);
       const maximum = Math.max(...values);
-      $('em', button).textContent = `${series.axis === 'right' ? '右轴' : '左轴'} · ${series.format(minimum)}–${series.format(maximum)}`;
+      $('em', button).textContent = `${series.axis === 'right' ? 'Right axis' : 'Left axis'} · ${series.format(minimum)}–${series.format(maximum)}`;
     });
   }
 
@@ -1346,17 +1389,17 @@
     const samples = state.recorderSamples;
     if (!samples.length) {
       $('#sampleCount').textContent = '0';
-      $('#recState').textContent = '等待样本';
+      $('#recState').textContent = 'Waiting for samples';
       recorderPaths.forEach(path => path.setAttribute('d', ''));
       $('#stageLineGroup').innerHTML = '';
       $('#recorderCursorGroup').hidden = true;
       ['#recAltitude', '#recDownrange', '#recStage', '#recSampleRate', '#recSnapshotTime'].forEach(selector => { const element = $(selector); if (element) element.textContent = '—'; });
-      $('#recorderCursorTime').textContent = '等待 Flight Recorder';
+      $('#recorderCursorTime').textContent = 'Waiting for Flight Recorder';
       $$('#recorderSeriesGrid small').forEach(element => { element.textContent = '—'; });
       return;
     }
 
-    $('#recState').textContent = state.paused ? '显示已暂停' : '记录中';
+    $('#recState').textContent = state.paused ? 'Display paused' : 'Recording';
     const group = recorderGroups[state.recorderGroup];
     const activeFields = group.fields.filter(field => !state.recorderHiddenFields.has(field));
     const hasLeftAxis = activeFields.some(field => recorderSeries[field].axis === 'left');
@@ -1408,8 +1451,8 @@
     }).join('');
 
     const inspecting = state.recorderCursorIndex !== null;
-    $('#recorderCursorMode').textContent = inspecting ? '历史样本' : '最新样本';
-    $('#recSnapshotLabel').textContent = inspecting ? '查看时刻' : '最新样本';
+    $('#recorderCursorMode').textContent = inspecting ? 'Historical sample' : 'Latest sample';
+    $('#recSnapshotLabel').textContent = inspecting ? 'Selected time' : 'Latest sample';
     $('#recorderCursorTime').textContent = `T+ ${formatDuration(Number(cursorSample.timeSinceMark) || 0)}`;
     $('#recSnapshotTime').textContent = `T+ ${formatDuration(Number(cursorSample.timeSinceMark) || 0)}`;
     $('#recDownrange').textContent = `${(Number(cursorSample.downRange || 0) / 1000).toFixed(1)} km`;
@@ -1417,7 +1460,7 @@
     $('#recAltitude').textContent = `${(Number(cursorSample.altitudeAsl || 0) / 1000).toFixed(2)} km`;
     const elapsed = Number(samples[samples.length - 1].timeSinceMark) - Number(samples[0].timeSinceMark);
     $('#recSampleRate').textContent = elapsed > 0 ? `${((samples.length - 1) / elapsed).toFixed(1)} Hz` : '—';
-    $('#sampleCount').textContent = samples.length.toLocaleString('zh-CN');
+    $('#sampleCount').textContent = samples.length.toLocaleString(uiLocale());
     updateRecorderSeriesValues(cursorSample);
   }
 
@@ -1467,36 +1510,36 @@
     const cabins = new Map();
     crew.forEach(member => {
       counts[member.profession] = (counts[member.profession] || 0) + 1;
-      cabins.set(member.location || '未知舱位', (cabins.get(member.location || '未知舱位') || 0) + 1);
+      cabins.set(member.location || 'Unknown compartment', (cabins.get(member.location || 'Unknown compartment') || 0) + 1);
     });
     $('#crewTotal').textContent = String(crew.length).padStart(2, '0');
-    $('#crewCapacity').textContent = `容量 ${capacity} 人`;
+    $('#crewCapacity').textContent = `Capacity ${capacity} crew`;
     $('#crewPilots').textContent = counts.Pilot || 0;
     $('#crewEngineers').textContent = counts.Engineer || 0;
     $('#crewScientists').textContent = counts.Scientist || 0;
     $('#crewOccupied').textContent = `${crew.length} / ${capacity}`;
-    $('#crewVesselName').textContent = data.vesselName || '无活动载具';
+    userText($('#crewVesselName'), data.vesselName, 'No active vessel');
     $('#crewVesselTotal').textContent = `${crew.length} / ${capacity}`;
     $('#crewCabins').innerHTML = [...cabins.entries()].map(([location, count]) =>
-      `<div class="cabin-count"><span>${escapeHtml(location)}</span><b>${count}</b></div>`
-    ).join('') || '<div class="cabin-count"><span>当前载具没有成员</span><b>0</b></div>';
+      `<div class="cabin-count"><span ${location === 'Unknown compartment' ? '' : 'data-l10n-skip'}>${escapeHtml(location)}</span><b>${count}</b></div>`
+    ).join('') || '<div class=\"cabin-count\"><span>No crew aboard this vessel</span><b>0</b></div>';
 
     const roles = {
-      Pilot: ['飞行员', 'pilot'], Engineer: ['工程师', 'engineer'], Scientist: ['科学家', 'scientist']
+      Pilot: ['Pilot', 'pilot'], Engineer: ['Engineer', 'engineer'], Scientist: ['Scientist', 'scientist']
     };
-    const header = '<header class="manifest-head"><span>宇航员</span><span>职业</span><span>舱内位置</span><span>状态</span><span>操作</span></header>';
+    const header = '<header class=\"manifest-head\"><span>Kerbal</span><span>Profession</span><span>Seat location</span><span>Status</span><span>Actions</span></header>';
     const rows = crew.map(member => {
-      const role = roles[member.profession] || [member.profession || '成员', ''];
+      const role = roles[member.profession] || [member.profession || 'Crew', ''];
       const initials = String(member.name || '?').split(/\s+/).map(word => word[0]).join('').slice(0, 2).toUpperCase();
-      const evaTitle = member.evaAvailable ? '单击后滑动确认舱外活动' : (member.evaUnavailableReason || '当前无法 EVA');
-      return `<article class="crew-row" data-crew-place="active"><div class="crew-identity"><span class="crew-avatar ${role[1]}">${escapeHtml(initials)}</span><p><b>${escapeHtml(member.name)}</b><small>等级 ${Number(member.level || 0)}</small></p></div><span class="role-badge ${role[1]}">${escapeHtml(role[0])}</span><div class="crew-place"><b>${escapeHtml(data.vesselName || '当前载具')}</b><small>${escapeHtml(member.location || '未知舱位')}</small></div><span class="crew-status on-duty"><i></i>在舰</span><div class="crew-eva-control"><button class="crew-eva confirm-trigger" data-crew-name="${escapeHtml(member.name)}" data-part-id="${Number(member.partId)}" title="${escapeHtml(evaTitle)}" aria-expanded="false" ${member.evaAvailable ? '' : 'disabled'}><span>EVA</span></button><div class="slide-confirm" hidden><div><b>滑动执行 EVA</b><button type="button" data-slide-cancel>取消</button></div><input type="range" min="0" max="100" step="1" value="0" aria-label="滑动执行 ${escapeHtml(member.name)} EVA"></div></div></article>`;
+      const evaTitle = member.evaAvailable ? 'Click, then slide to confirm EVA' : (member.evaUnavailableReason || 'EVA currently unavailable');
+      return `<article class="crew-row" data-crew-place="active"><div class="crew-identity"><span class="crew-avatar ${role[1]}">${escapeHtml(initials)}</span><p><b data-l10n-skip>${escapeHtml(member.name)}</b><small>Level ${Number(member.level || 0)}</small></p></div><span class="role-badge ${role[1]}">${escapeHtml(role[0])}</span><div class="crew-place"><b ${data.vesselName ? 'data-l10n-skip' : ''}>${escapeHtml(data.vesselName || 'Current vessel')}</b><small ${member.location ? 'data-l10n-skip' : ''}>${escapeHtml(member.location || 'Unknown compartment')}</small></div><span class="crew-status on-duty"><i></i>Aboard</span><div class="crew-eva-control"><button class="crew-eva confirm-trigger" data-crew-name="${escapeHtml(member.name)}" data-part-id="${Number(member.partId)}" title="${escapeHtml(evaTitle)}" aria-expanded="false" ${member.evaAvailable ? '' : 'disabled'}><span>EVA</span></button><div class="slide-confirm" hidden><div><b>Slide to EVA</b><button type="button" data-slide-cancel>Cancel</button></div><input type="range" min="0" max="100" step="1" value="0" aria-label="Slide to execute ${escapeHtml(member.name)} EVA"></div></div></article>`;
     }).join('');
-    $('#crewManifest').innerHTML = header + (rows || '<article class="crew-row"><div class="crew-identity"><p><b>当前载具没有成员</b><small>无人载具</small></p></div></article>');
+    $('#crewManifest').innerHTML = header + (rows || '<article class=\"crew-row\"><div class=\"crew-identity\"><p><b>No crew aboard this vessel</b><small>Uncrewed vessel</small></p></div></article>');
     $$('.crew-eva-control').forEach(control => {
       const button = control.querySelector('.crew-eva');
       bindSlideConfirmation(button, control.querySelector('.slide-confirm'), () => {
         if (!sendCommand('vessel.crew.eva', { crewName: button.dataset.crewName, partId: Number(button.dataset.partId) }))
-        showToast('实时连接不可用，未执行 EVA');
+        showToast('No live connection; EVA not executed');
       });
     });
   }
@@ -1607,14 +1650,14 @@
       marker.style.top = `${Math.max(0, Math.min(1, Number(aero.normalizedY))) * 100}%`;
     }
     if (!available) {
-      readout.querySelector('b').textContent = '当前不可用';
-      readout.querySelector('small').textContent = aero?.status || '等待 FAR 气动力数据';
+      readout.querySelector('b').textContent = 'Currently unavailable';
+      readout.querySelector('small').textContent = aero?.status || 'Waiting for FAR aerodynamic data';
       return;
     }
     const forward = Number(aero.forwardOffset || 0);
-    const longitudinal = Math.abs(forward) < .01 ? '与 CoM 纵向重合' : `${Math.abs(forward).toFixed(2)} m ${forward >= 0 ? '前方' : '后方'}`;
+    const longitudinal = Math.abs(forward) < .01 ? 'Longitudinally aligned with CoM' : `${Math.abs(forward).toFixed(2)} m ${forward >= 0 ? 'ahead' : 'behind'}`;
     readout.querySelector('b').textContent = `${aero.source || 'FAR'} · ${Number(aero.distanceFromCom || 0).toFixed(2)} m`;
-    readout.querySelector('small').textContent = `CoM 参考：${longitudinal} · 右 ${Number(aero.rightOffset || 0).toFixed(2)} m · 上 ${Number(aero.upOffset || 0).toFixed(2)} m${projected ? '' : ' · 当前视图外'}`;
+    readout.querySelector('small').textContent = `CoM Reference:${longitudinal} · Right ${Number(aero.rightOffset || 0).toFixed(2)} m · Up ${Number(aero.upOffset || 0).toFixed(2)} m${projected ? '' : ' · Outside current view'}`;
   }
 
   function selectVesselPart(partId) {
@@ -1629,27 +1672,35 @@
     }
     const byId = new Map(parts.map(part => [part.id, part]));
     const inspector = $('.part-inspector');
-    $('#partName').textContent = selected.title || selected.name;
-    $('#part-action-title').textContent = selected.title || selected.name;
-    $('#partActionMeta').textContent = `${selected.name} · ${Number(selected.stage) < 0 ? '未分级' : `Stage ${selected.stage}`} · PART ${selected.id}`;
+    userText($('#partName'), selected.title || selected.name);
+    userText($('#part-action-title'), selected.title || selected.name);
+    const partMeta = `<span data-l10n-skip>${escapeHtml(selected.name || '')}</span> · <span>${Number(selected.stage) < 0 ? 'Unstaged' : `Stage ${Number(selected.stage)}`}</span>`;
+    $('#partActionMeta').innerHTML = `${partMeta} · <span>PART ${Number(selected.id)}</span>`;
     inspector.querySelector('header .eyebrow').textContent = `PART / ${selected.id}`;
-    inspector.querySelector('header small').textContent = `${selected.name} · ${Number(selected.stage) < 0 ? '未分级' : `Stage ${selected.stage}`}`;
-    inspector.querySelector('.part-health').innerHTML = `<div><span>内部温度</span><b>${Number(selected.temperature || 0).toFixed(0)} K</b><small>/ ${Number(selected.maximumTemperature || 0).toFixed(0)} K</small></div><div><span>蒙皮温度</span><b>${Number(selected.skinTemperature || 0).toFixed(0)} K</b><small>/ ${Number(selected.maximumSkinTemperature || 0).toFixed(0)} K</small></div>`;
-    inspector.querySelector('.resource-stack').innerHTML = '<h3>资源</h3>' + (selected.resources || []).map(resource => {
+    inspector.querySelector('header small').innerHTML = partMeta;
+    inspector.querySelector('.part-health').innerHTML = `<div><span>Internal temperature</span><b>${Number(selected.temperature || 0).toFixed(0)} K</b><small>/ ${Number(selected.maximumTemperature || 0).toFixed(0)} K</small></div><div><span>Skin temperature</span><b>${Number(selected.skinTemperature || 0).toFixed(0)} K</b><small>/ ${Number(selected.maximumSkinTemperature || 0).toFixed(0)} K</small></div>`;
+    inspector.querySelector('.resource-stack').innerHTML = '<h3>Resources</h3>' + (selected.resources || []).map(resource => {
       const ratio = resource.maximum > 0 ? Math.max(0, Math.min(100, resource.amount / resource.maximum * 100)) : 0;
-      return `<div class="resource"><span>${escapeHtml(resource.name)} <b>${ratio.toFixed(0)}%</b></span><i><em style="width:${ratio.toFixed(1)}%"></em></i><small>${Number(resource.amount).toFixed(1)} / ${Number(resource.maximum).toFixed(1)} u</small></div>`;
+      return `<div class="resource"><span><span data-l10n-skip>${escapeHtml(resource.name)}</span> <b>${ratio.toFixed(0)}%</b></span><i><em style="width:${ratio.toFixed(1)}%"></em></i><small>${Number(resource.amount).toFixed(1)} / ${Number(resource.maximum).toFixed(1)} u</small></div>`;
     }).join('');
     const parent = selected.parentId == null ? null : byId.get(selected.parentId);
     const children = parts.filter(part => part.parentId === selected.id).length;
-    inspector.querySelector('.part-facts').innerHTML = `<div><dt>干质量</dt><dd>${Number(selected.mass || 0).toFixed(3)} t</dd></div><div><dt>父零件</dt><dd>${escapeHtml(parent?.title || '根部')}</dd></div><div><dt>子零件</dt><dd>${children}</dd></div><div><dt>结构修订</dt><dd>#${Number(data.revision || 0)}</dd></div>`;
+    inspector.querySelector('.part-facts').innerHTML = `<div><dt>Dry mass</dt><dd>${Number(selected.mass || 0).toFixed(3)} t</dd></div><div><dt>Parent part</dt><dd${parent?.title ? ' data-l10n-skip' : ''}>${escapeHtml(parent?.title || 'Root')}</dd></div><div><dt>Child parts</dt><dd>${children}</dd></div><div><dt>Structure revision</dt><dd>#${Number(data.revision || 0)}</dd></div>`;
     if (!state.partControlEditingUntil || performance.now() > state.partControlEditingUntil) renderPartControls(selected);
     $$('.part-index-item').forEach(button => button.classList.toggle('is-selected', Number(button.dataset.partId) === Number(selected.id)));
     $$('.vehicle-parts .part').forEach(part => part.classList.toggle('selected', Number(part.dataset.partId) === Number(selected.id)));
     $('#vesselSelectedId').textContent = `SELECTED / ${selected.id}`;
-    $('#vesselSelectedName').textContent = String(selected.title || selected.name || 'PART').toUpperCase().slice(0, 24);
+    userText($('#vesselSelectedName'), String(selected.title || selected.name || 'PART').toUpperCase().slice(0, 24));
   }
 
   function renderPartControls(part) {
+    const moduleMeta = (kind, index, status) => {
+      const labels = { rcs: 'RCS', light: 'Lights', gear: 'Landing gear', cargo: 'Cargo bay door',
+        clamp: 'Launch clamp', parachute: 'Parachute', radiator: 'Radiator', fairing: 'Fairing',
+        decoupler: 'Decoupler', docking: 'Docking ports', b9: 'B9 Part Switch', generator: 'Generator',
+        reactor: 'Nuclear reactor', converter: 'Resource converter', control: 'Control reference' };
+      return `<span>${escapeHtml(labels[kind] || kind || 'Module')}</span>${status ? ` · <span>${escapeHtml(status)}</span>` : ''} · <span>MODULE ${Number(index)}</span>`;
+    };
     const engines = Array.isArray(part.engines) ? part.engines : [];
     const toggles = Array.isArray(part.toggles) ? part.toggles : [];
     const actions = Array.isArray(part.actions) ? part.actions : [];
@@ -1658,25 +1709,25 @@
       const name = engine.name || engine.engineId || `ENGINE ${ordinal + 1}`;
       const gimbal = Number(engine.gimbalModuleIndex) >= 0
         ? `<button class="part-toggle${engine.gimbalEnabled ? ' is-on' : ''}" data-part-command="vessel.part.gimbal.set" data-module-index="${Number(engine.gimbalModuleIndex)}" data-enabled="${engine.gimbalEnabled ? 'false' : 'true'}">GIMBAL ${engine.gimbalEnabled ? 'ON' : 'OFF'}</button>` : '<button class="part-toggle" disabled>NO GIMBAL</button>';
-      return `<div class="part-control-card engine-control"><div class="part-control-title"><span><b>${escapeHtml(name)}</b><small>ENGINE ${ordinal + 1} · MODULE ${Number(engine.moduleIndex)}</small></span><button class="part-toggle${engine.ignited ? ' is-on' : ''}" data-part-command="vessel.part.engine.setActive" data-module-index="${Number(engine.moduleIndex)}" data-enabled="${engine.ignited ? 'false' : 'true'}" ${(engine.ignited ? engine.canShutdown : engine.canActivate) ? '' : 'disabled'}>${engine.ignited ? '运行中' : '已关闭'}</button></div><div class="engine-limit"><label><span>推力限制阀 · 实时</span><output>${limit.toFixed(0)}%</output></label><input type="range" min="0" max="100" step="1" value="${limit.toFixed(0)}" data-engine-limit="${Number(engine.moduleIndex)}" data-part-id="${Number(part.id)}" aria-label="${escapeHtml(name)} 推力限制"></div><div class="engine-switches">${gimbal}<span></span></div></div>`;
+      return `<div class="part-control-card engine-control"><div class="part-control-title"><span><b data-l10n-skip>${escapeHtml(name)}</b><small>ENGINE ${ordinal + 1} · MODULE ${Number(engine.moduleIndex)}</small></span><button class="part-toggle${engine.ignited ? ' is-on' : ''}" data-part-command="vessel.part.engine.setActive" data-module-index="${Number(engine.moduleIndex)}" data-enabled="${engine.ignited ? 'false' : 'true'}" ${(engine.ignited ? engine.canShutdown : engine.canActivate) ? '' : 'disabled'}>${engine.ignited ? 'Running' : 'Off'}</button></div><div class="engine-limit"><label><span>Thrust limiter · live</span><output>${limit.toFixed(0)}%</output></label><input type="range" min="0" max="100" step="1" value="${limit.toFixed(0)}" data-engine-limit="${Number(engine.moduleIndex)}" data-part-id="${Number(part.id)}" aria-label="${escapeHtml(name)} Thrust limit"></div><div class="engine-switches">${gimbal}<span></span></div></div>`;
     }).join('');
-    const labels = { rcs: ['RCS 推进器', '启用', '停用'], light: ['灯光', '开启', '关闭'], gear: ['起落架', '放下', '收起'], cargo: ['货舱门', '打开', '关闭'] };
+    const labels = { rcs: ['RCS Thruster', 'Enable', 'Deactivate'], light: ['Lights', 'On', 'Off'], gear: ['Landing gear', 'Deploy', 'Retract'], cargo: ['Cargo bay door', 'Open', 'Closed'] };
     const toggleCards = toggles.map(toggle => {
-      const label = labels[toggle.kind] || [toggle.name || toggle.kind, '开启', '关闭'];
-      return `<div class="part-control-card"><div class="part-control-title"><span><b>${escapeHtml(toggle.name || label[0])}</b><small>${escapeHtml(String(toggle.kind || '').toUpperCase())} · MODULE ${Number(toggle.moduleIndex)}${toggle.transitioning ? ' · MOVING' : ''}</small></span><button class="part-toggle${toggle.enabled ? ' is-on' : ''}" data-part-command="vessel.part.${escapeHtml(toggle.kind)}.set" data-module-index="${Number(toggle.moduleIndex)}" data-enabled="${toggle.enabled ? 'false' : 'true'}" ${toggle.transitioning ? 'disabled' : ''}>${toggle.enabled ? label[1] : label[2]}</button></div></div>`;
+      const label = labels[toggle.kind] || [toggle.name || toggle.kind, 'On', 'Off'];
+      return `<div class="part-control-card"><div class="part-control-title"><span><b>${escapeHtml(toggle.name || label[0])}</b><small>${moduleMeta(toggle.kind, toggle.moduleIndex, toggle.transitioning ? 'Moving' : '')}</small></span><button class="part-toggle${toggle.enabled ? ' is-on' : ''}" data-part-command="vessel.part.${escapeHtml(toggle.kind)}.set" data-module-index="${Number(toggle.moduleIndex)}" data-enabled="${toggle.enabled ? 'false' : 'true'}" ${toggle.transitioning ? 'disabled' : ''}>${toggle.enabled ? label[1] : label[2]}</button></div></div>`;
     }).join('');
     const actionCards = actions.map(action => {
       const options = Array.isArray(action.options) ? action.options : [];
       const optionControl = options.length
-        ? `<select data-part-action-option="${Number(action.moduleIndex)}" aria-label="${escapeHtml(action.name || '模块')} 配置">${options.map(option => `<option value="${escapeHtml(option.value)}" ${option.value === action.selectedOption ? 'selected' : ''}>${escapeHtml(option.label || option.value)}</option>`).join('')}</select>`
+        ? `<select data-part-action-option="${Number(action.moduleIndex)}" aria-label="${escapeHtml(action.name || 'Module')} Configuration">${options.map(option => `<option value="${escapeHtml(option.value)}" ${option.value === action.selectedOption ? 'selected' : ''}>${escapeHtml(option.label || option.value)}</option>`).join('')}</select>`
         : '';
       const danger = ['parachute.cut', 'partEvent.GUICut', 'partEvent.Release', 'partEvent.DeployFairing',
         'partEvent.Jettison', 'partEvent.OnJettisonFairing', 'partEvent.DeployEvent',
         'partEvent.Decouple', 'partEvent.Undock', 'partEvent.UndockSameVessel'].includes(action.command);
-      const button = `<button class="part-action-button${action.active ? ' is-active' : ''}${danger ? ' is-danger' : ''}" data-part-action="${escapeHtml(action.command || '')}" data-module-index="${Number(action.moduleIndex)}" ${action.available && action.command ? '' : 'disabled'}>${escapeHtml(action.commandLabel || '不可操作')}</button>`;
-      return `<div class="part-control-card part-module-action${options.length ? ' has-options' : ''}"><div class="part-control-title"><span><b>${escapeHtml(action.name || action.kind)}</b><small>${escapeHtml(String(action.kind || '').toUpperCase())} · ${escapeHtml(action.status || '等待状态')} · MODULE ${Number(action.moduleIndex)}</small></span></div>${optionControl}${button}</div>`;
+      const button = `<button class="part-action-button${action.active ? ' is-active' : ''}${danger ? ' is-danger' : ''}" data-part-action="${escapeHtml(action.command || '')}" data-module-index="${Number(action.moduleIndex)}" ${action.available && action.command ? '' : 'disabled'}>${escapeHtml(action.commandLabel || 'Not actionable')}</button>`;
+      return `<div class="part-control-card part-module-action${options.length ? ' has-options' : ''}"><div class="part-control-title"><span><b>${escapeHtml(action.name || action.kind)}</b><small>${moduleMeta(action.kind, action.moduleIndex, action.status || 'Waiting for state')}</small></span></div>${optionControl}${button}</div>`;
     }).join('');
-    $('#partControlStack').innerHTML = engineCards + toggleCards + actionCards || '<p class="part-control-empty">此零件没有可远程控制的设备</p>';
+    $('#partControlStack').innerHTML = engineCards + toggleCards + actionCards || '<p class=\"part-control-empty\">This part has no remotely controllable devices</p>';
     $('#partControlStack').querySelectorAll('[data-part-command], [data-part-action]').forEach(button => {
       button.dataset.partId = String(part.id);
     });
@@ -1691,11 +1742,11 @@
       power: /ModuleDeployableSolarPanel|ModuleGenerator|FissionGenerator|ModuleResourceConverter|solar|reactor|battery|电池|太阳能|反应堆/i
     };
     const bulkLabels = {
-      engine: ['ENGINE GROUP', '全部关闭', '全部启动'],
-      rcs: ['RCS GROUP', '全部停用', '全部启用'],
-      cargo: ['CARGO GROUP', '全部关闭', '全部打开'],
-      gear: ['GEAR GROUP', '全部收起', '全部放下'],
-      light: ['LIGHT GROUP', '全部关闭', '全部开启']
+      engine: ['ENGINE GROUP', 'Turn all off', 'Start all'],
+      rcs: ['RCS GROUP', 'Deactivate all', 'Enable all'],
+      cargo: ['CARGO GROUP', 'Turn all off', 'Open all'],
+      gear: ['GEAR GROUP', 'Retract all', 'Deploy all'],
+      light: ['LIGHT GROUP', 'Turn all off', 'Turn all on']
     };
     const groupActions = $('#partGroupActions');
     const groupLabels = bulkLabels[state.partGroup];
@@ -1720,9 +1771,9 @@
     }) : grouped;
     $('#partIndexList').innerHTML = visible.map(part => {
       const heat = Math.max(0, partHeatRatio(part) * 100);
-      const stage = Number(part.stage) < 0 ? '未分级' : `STAGE ${Number(part.stage)}`;
-      return `<button class="part-index-item${Number(part.id) === Number(state.selectedPartId) ? ' is-selected' : ''}" data-part-id="${Number(part.id)}"><span><b>${escapeHtml(part.title || part.name)}</b><small>${escapeHtml(part.name)} · ${stage}</small></span><em>${heat.toFixed(0)}%</em></button>`;
-    }).join('') || '<div class="part-index-item"><span><b>没有匹配零件</b><small>调整搜索条件</small></span></div>';
+      const stage = Number(part.stage) < 0 ? 'Unstaged' : `STAGE ${Number(part.stage)}`;
+      return `<button class="part-index-item${Number(part.id) === Number(state.selectedPartId) ? ' is-selected' : ''}" data-part-id="${Number(part.id)}"><span><b data-l10n-skip>${escapeHtml(part.title || part.name)}</b><small><span data-l10n-skip>${escapeHtml(part.name)}</span> · <span>${stage}</span></small></span><em>${heat.toFixed(0)}%</em></button>`;
+    }).join('') || '<div class=\"part-index-item\"><span><b>No matching parts</b><small>Adjust search filters</small></span></div>';
     $$('.part-index-item[data-part-id]').forEach(button => button.addEventListener('click', () => selectVesselPart(Number(button.dataset.partId))));
   }
 
@@ -1797,12 +1848,12 @@
     if (!parts.length) {
       state.selectedPartId = null;
       state.highlightedPartId = null;
-      $('#part-action-title').textContent = '无活动载具';
-      $('#partActionMeta').textContent = '等待可选择的零件';
-      $('#partControlStack').innerHTML = '<p class="part-control-empty">当前没有可操作的零件</p>';
+      userText($('#part-action-title'), null, 'No active vessel');
+      $('#partActionMeta').textContent = 'Waiting for selectable parts';
+      $('#partControlStack').innerHTML = '<p class=\"part-control-empty\">No controllable parts</p>';
       $('#vehicleConnections').innerHTML = '';
       $('#vehicleParts').innerHTML = '';
-      $('#partIndexList').innerHTML = '<div class="part-index-item"><span><b>无活动载具</b></span></div>';
+      $('#partIndexList').innerHTML = '<div class=\"part-index-item\"><span><b>No active vessel</b></span></div>';
       return;
     }
     renderVesselDiagram(parts);
@@ -1827,7 +1878,7 @@
     if (!button || !['engine', 'rcs', 'cargo', 'gear', 'light'].includes(state.partGroup)) return;
     if (!sendCommand('vessel.partGroup.set', {
       kind: state.partGroup, enabled: button.dataset.groupEnabled === 'true'
-    })) showToast('实时连接不可用，分组命令未发送');
+    })) showToast('No live connection; group command not sent');
   });
   $('#partControlStack').addEventListener('pointerdown', event => {
     if (event.target.matches('[data-engine-limit], [data-part-action-option]')) state.partControlEditingUntil = performance.now() + 60000;
@@ -1852,7 +1903,7 @@
       input._engineLimitLastSent = performance.now();
       if (!sendCommand('vessel.part.engine.setThrustLimit', {
         partId: Number(input.dataset.partId), moduleIndex: Number(input.dataset.engineLimit), percent: Number(input.value)
-      })) showToast('实时连接不可用，推力限制未更新');
+      })) showToast('No live connection; thrust limit not updated');
     };
     const elapsed = performance.now() - Number(input._engineLimitLastSent || 0);
     if (immediate || elapsed >= 80) { send(); return; }
@@ -1868,7 +1919,7 @@
         moduleIndex: Number(commandButton.dataset.moduleIndex),
         enabled: commandButton.dataset.enabled === 'true'
       };
-      if (!sendCommand(commandButton.dataset.partCommand, parameters)) showToast('实时连接不可用，零件命令未发送');
+      if (!sendCommand(commandButton.dataset.partCommand, parameters)) showToast('No live connection; part command not sent');
       return;
     }
     const actionButton = event.target.closest('[data-part-action]');
@@ -1881,7 +1932,7 @@
         moduleIndex: Number(actionButton.dataset.moduleIndex),
         action: actionButton.dataset.partAction,
         value: option?.value || ''
-      })) showToast('实时连接不可用，零件操作未发送');
+      })) showToast('No live connection; part action not sent');
       return;
     }
   });
@@ -1891,7 +1942,7 @@
     const expand = expandable.some(entry => !state.expandedTargets.has(entry.id));
     state.expandedTargets.clear();
     if (expand) expandable.forEach(entry => state.expandedTargets.add(entry.id));
-    $('#expandTargetTree').textContent = expand ? '折叠全部' : '展开全部';
+    $('#expandTargetTree').textContent = expand ? 'Collapse all' : 'Expand all';
     renderTargetTree();
   });
   $('#applyTarget').addEventListener('click', () => {
@@ -1899,10 +1950,10 @@
     if (!entry) return;
     if (!sendCommand('target.set', {
       kind: entry.kind, bodyName: entry.bodyName, vesselId: entry.vesselId, partId: Number(entry.partId || 0)
-    })) showToast('实时连接不可用，未设置目标');
+    })) showToast('No live connection; target not set');
   });
   $('#clearTarget').addEventListener('click', () => {
-    if (!sendCommand('target.clear')) showToast('实时连接不可用，未清除目标');
+    if (!sendCommand('target.clear')) showToast('No live connection; target not cleared');
   });
 
   function reconnectRealtime() {
@@ -1953,7 +2004,7 @@
       autoStage: $('#envelopeAutoStage').checked
     };
     if (parameters.minimumThrottlePercent > parameters.maximumThrottlePercent) {
-      showToast('最小油门不能高于最大油门'); return;
+      showToast('Minimum throttle cannot exceed maximum throttle'); return;
     }
     if (sendCommand('mechjeb.envelope.set', parameters)) state.envelopeDraft = false;
   });
@@ -1970,7 +2021,7 @@
     });
     if (!commandId) {
       state.trajectorySettingsDraft = false;
-      showToast('实时连接不可用，Trajectories 设置未发送');
+      showToast('No live connection; Trajectories settings not sent');
       return false;
     }
     state.trajectorySettingsPendingCommandId = commandId;
@@ -2017,7 +2068,7 @@
     if (pinned) localStorage.removeItem('armorControlDefaultView');
     else localStorage.setItem('armorControlDefaultView', 'flight');
     event.currentTarget.classList.toggle('is-active', !pinned);
-    showToast(pinned ? '已取消默认飞行页' : '飞行页已设为默认页面');
+    showToast(pinned ? 'Default Flight page cleared' : 'Flight is now the default page');
   });
   if (localStorage.getItem('armorControlDefaultView') === 'flight') $('#pinFlightView').classList.add('is-active');
 
@@ -2037,27 +2088,27 @@
   const peObserver = new MutationObserver(updatePeColors);
   $$('[data-pe]').forEach(element => peObserver.observe(element, { attributes: true, attributeFilter: ['data-pe'] }));
 
-  const timeField = options => `<label><span>执行时机</span><select data-time-reference>${options.map(option => `<option value="${option[0]}">${option[1]}</option>`).join('')}</select></label><label class="time-lead-field"><span>固定延迟</span><div class="unit-input"><input data-time-lead value="60" inputmode="decimal"><b>s</b></div></label>`;
+  const timeField = options => `<label><span>Execution timing</span><select data-time-reference>${options.map(option => `<option value="${option[0]}">${option[1]}</option>`).join('')}</select></label><label class="time-lead-field"><span>Fixed delay</span><div class="unit-input"><input data-time-lead value="60" inputmode="decimal"><b>s</b></div></label>`;
   const unitField = (label, value, unit) => `<label><span>${label}</span><div class="unit-input"><input value="${value}" inputmode="decimal"><b>${unit}</b></div></label>`;
-  const targetField = (name = '当前 KSP 目标', detail = '由游戏目标系统提供') => `<div class="setup-target"><span>目标<b>${name}</b></span><em>${detail}</em></div>`;
+  const targetField = (name = 'Current KSP target', detail = 'Provided by the game target system') => `<div class="setup-target"><span>Target<b>${name}</b></span><em>${detail}</em></div>`;
   const note = text => `<p class="setup-note">${text}</p>`;
   const operations = {
-    circularize: { code: 'CIRCULARIZE', fields: timeField([['APOAPSIS', '在下个远拱点'], ['PERIAPSIS', '在下个近拱点'], ['X_FROM_NOW', '在固定时间后']]) + note('圆化不需要输入目标高度；最终高度由所选执行位置决定。') },
-    periapsis: { code: 'CHANGE PERIAPSIS', fields: timeField([['APOAPSIS', '在下个远拱点'], ['X_FROM_NOW', '在固定时间后']]) + unitField('新近拱点高度', '85.0', 'km') },
-    apoapsis: { code: 'CHANGE APOAPSIS', fields: timeField([['PERIAPSIS', '在下个近拱点'], ['X_FROM_NOW', '在固定时间后']]) + unitField('新远拱点高度', '420.0', 'km') },
-    apsides: { code: 'CHANGE APSIDES', fields: timeField([['APOAPSIS', '在下个远拱点'], ['X_FROM_NOW', '在固定时间后']]) + unitField('新近拱点高度', '85.0', 'km') + unitField('新远拱点高度', '420.0', 'km') },
-    inclination: { code: 'CHANGE INCLINATION', fields: timeField([['EQ_NEAREST_AD', '在最近的赤道 AN / DN'], ['EQ_HIGHEST_AD', '在最省燃料的赤道 AN / DN'], ['EQ_ASCENDING', '在赤道升交点'], ['EQ_DESCENDING', '在赤道降交点'], ['X_FROM_NOW', '在固定时间后']]) + unitField('新轨道倾角', '0.00', 'deg') },
-    lan: { code: 'CHANGE LAN', fields: timeField([['APOAPSIS', '在下个远拱点'], ['PERIAPSIS', '在下个近拱点'], ['X_FROM_NOW', '在固定时间后']]) + unitField('新升交点经度', '74.56', 'deg') + note('仅非赤道轨道可定义 LAN；接近零倾角时 MechJeb 会返回警告。') },
-    semimajor: { code: 'CHANGE SEMI-MAJOR AXIS', fields: timeField([['APOAPSIS', '在下个远拱点'], ['PERIAPSIS', '在下个近拱点'], ['X_FROM_NOW', '在固定时间后']]) + unitField('新半长轴', '782.4', 'km') },
-    longitude: { code: 'SHIFT APSIS LONGITUDE', fields: unitField('新地面经度', '110.0', 'deg') + note('MechJeb 会自行计算改变轨道周期所需的节点时间。') },
-    hohmann: { code: 'HOHMANN TRANSFER', dv: '214.9 m/s', result: '交会距离 1.8 km', burn: '00:12.9', time: 'T− 14:32', fields: targetField() + note('自动寻找下一次霍曼转移窗口；仅适用于与当前载具环绕同一天体的轨道目标。') },
-    correction: { code: 'COURSE CORRECTION', fields: targetField('Duna', '当前 KSP 目标') + unitField('目标近拱点', '80.0', 'km') + timeField([['COMPUTED', '由 MechJeb 计算最优时机'], ['X_FROM_NOW', '在固定时间后']]) },
-    intercept: { code: 'INTERCEPT AT TIME', dv: '347.6 m/s', result: '交会 T+ 02:00:00', burn: '00:20.8', time: 'T− 00:10', fields: targetField() + unitField('转移时间', '2:00:00', 'h:m:s') + note('Lambert 解算会让载具在指定转移时间后抵达目标位置。') },
-    planes: { code: 'MATCH ORBIT PLANES', fields: targetField() + timeField([['REL_NEAREST_AD', '在最近的相对 AN / DN'], ['REL_HIGHEST_AD', '在最省燃料的相对 AN / DN'], ['REL_ASCENDING', '在下个相对升交点'], ['REL_DESCENDING', '在下个相对降交点']]) },
-    velocity: { code: 'MATCH VELOCITIES', fields: targetField() + timeField([['CLOSEST_APPROACH', '在最近接近点'], ['X_FROM_NOW', '在固定时间后']]) + note('在选定时刻消除相对速度，通常作为交会流程的末端机动。') },
-    resonant: { code: 'RESONANT ORBIT', fields: timeField([['APOAPSIS', '在下个远拱点'], ['PERIAPSIS', '在下个近拱点']]) + unitField('载具轨道周期数', '2', 'rev') + unitField('目标轨道周期数', '3', 'rev') },
-    moonreturn: { code: 'MOON RETURN', fields: unitField('母星返回近拱点', '32.0', 'km') + note('MechJeb 自动计算返回窗口；仅当载具环绕具有母天体轨道的卫星时可用。') },
-    planettransfer: { code: 'TRANSFER TO PLANET', fields: targetField('当前目标', '当前 KSP 行星目标') + note('MechJeb 自动计算下一次相位角窗口；目标须与当前天体拥有相同母天体。') },
+    circularize: { code: 'CIRCULARIZE', fields: timeField([['APOAPSIS', 'At next apoapsis'], ['PERIAPSIS', 'At next periapsis'], ['X_FROM_NOW', 'After a fixed delay']]) + note('Circularization needs no target altitude; the selected burn position determines the final altitude.') },
+    periapsis: { code: 'CHANGE PERIAPSIS', fields: timeField([['APOAPSIS', 'At next apoapsis'], ['X_FROM_NOW', 'After a fixed delay']]) + unitField('New periapsis altitude', '85.0', 'km') },
+    apoapsis: { code: 'CHANGE APOAPSIS', fields: timeField([['PERIAPSIS', 'At next periapsis'], ['X_FROM_NOW', 'After a fixed delay']]) + unitField('New apoapsis altitude', '420.0', 'km') },
+    apsides: { code: 'CHANGE APSIDES', fields: timeField([['APOAPSIS', 'At next apoapsis'], ['X_FROM_NOW', 'After a fixed delay']]) + unitField('New periapsis altitude', '85.0', 'km') + unitField('New apoapsis altitude', '420.0', 'km') },
+    inclination: { code: 'CHANGE INCLINATION', fields: timeField([['EQ_NEAREST_AD', 'At nearest equatorial AN / DN'], ['EQ_HIGHEST_AD', 'At cheapest equatorial AN / DN'], ['EQ_ASCENDING', 'At equatorial ascending node'], ['EQ_DESCENDING', 'At equatorial descending node'], ['X_FROM_NOW', 'After a fixed delay']]) + unitField('New inclination', '0.00', 'deg') },
+    lan: { code: 'CHANGE LAN', fields: timeField([['APOAPSIS', 'At next apoapsis'], ['PERIAPSIS', 'At next periapsis'], ['X_FROM_NOW', 'After a fixed delay']]) + unitField('New LAN', '74.56', 'deg') + note('LAN is only defined for non-equatorial orbits; MechJeb warns near zero inclination.') },
+    semimajor: { code: 'CHANGE SEMI-MAJOR AXIS', fields: timeField([['APOAPSIS', 'At next apoapsis'], ['PERIAPSIS', 'At next periapsis'], ['X_FROM_NOW', 'After a fixed delay']]) + unitField('New semi-major axis', '782.4', 'km') },
+    longitude: { code: 'SHIFT APSIS LONGITUDE', fields: unitField('New ground longitude', '110.0', 'deg') + note('MechJeb The node time for the period change is calculated automatically.') },
+    hohmann: { code: 'HOHMANN TRANSFER', dv: '214.9 m/s', result: 'Rendezvous distance 1.8 km', burn: '00:12.9', time: 'T− 14:32', fields: targetField() + note('Finds the next Hohmann window for a target orbiting the same body.') },
+    correction: { code: 'COURSE CORRECTION', fields: targetField('Duna', 'Current KSP target') + unitField('Target periapsis', '80.0', 'km') + timeField([['COMPUTED', 'MechJeb calculates optimal timing'], ['X_FROM_NOW', 'After a fixed delay']]) },
+    intercept: { code: 'INTERCEPT AT TIME', dv: '347.6 m/s', result: 'Rendezvous T+ 02:00:00', burn: '00:20.8', time: 'T− 00:10', fields: targetField() + unitField('Transfer time', '2:00:00', 'h:m:s') + note('Lambert Computes an intercept at the target position after the chosen transfer time.') },
+    planes: { code: 'MATCH ORBIT PLANES', fields: targetField() + timeField([['REL_NEAREST_AD', 'At nearest relative AN / DN'], ['REL_HIGHEST_AD', 'At cheapest relative AN / DN'], ['REL_ASCENDING', 'At next relative ascending node'], ['REL_DESCENDING', 'At next relative descending node']]) },
+    velocity: { code: 'MATCH VELOCITIES', fields: targetField() + timeField([['CLOSEST_APPROACH', 'At closest approach'], ['X_FROM_NOW', 'After a fixed delay']]) + note('Cancels relative velocity at the chosen time, usually the final rendezvous maneuver.') },
+    resonant: { code: 'RESONANT ORBIT', fields: timeField([['APOAPSIS', 'At next apoapsis'], ['PERIAPSIS', 'At next periapsis']]) + unitField('Vessel orbit count', '2', 'rev') + unitField('Target orbit count', '3', 'rev') },
+    moonreturn: { code: 'MOON RETURN', fields: unitField('Parent-body return periapsis', '32.0', 'km') + note('MechJeb Computes a return window when orbiting a moon with a parent-body orbit.') },
+    planettransfer: { code: 'TRANSFER TO PLANET', fields: targetField('Current target', 'Current KSP planet target') + note('MechJeb Computes the next phase-angle window; target and current body must share a parent.') },
     advanced: { code: 'ADVANCED TRANSFER', fields: '' }
   };
 
@@ -2073,11 +2124,11 @@
     const syncLeadTime = () => { if (leadTimeField) leadTimeField.hidden = timeReference?.value !== 'X_FROM_NOW'; };
     timeReference?.addEventListener('change', syncLeadTime);
     syncLeadTime();
-    $('#nodeDv').textContent = '等待解算';
-    $('#plannedOrbit').textContent = '提交后由 MechJeb 回显';
+    $('#nodeDv').textContent = 'Waiting for solution';
+    $('#plannedOrbit').textContent = 'MechJeb result after submission';
     $('#plannedBurn').textContent = '—';
     $('#plannedTime').textContent = '—';
-    if (announce) showToast(`机动类型：${button.dataset.maneuver}`);
+    if (announce) showToast(`Maneuver:${button.dataset.maneuver}`);
   }
 
   $$('.maneuver-list button').forEach(button => button.addEventListener('click', () => renderOperation(button)));
@@ -2112,12 +2163,12 @@
   function requestManeuver(execute) {
     const parameters = maneuverRequest();
     if (!parameters) {
-      showToast('高级转移需要先完成 Porkchop 解算与选点');
+      showToast('Solve the porkchop plot and select a point before creating an advanced transfer');
       return;
     }
     parameters.execute = execute;
     if (!sendCommand('mechjeb.maneuver.create', parameters)) {
-      showToast('实时连接不可用，节点未创建');
+      showToast('No live connection; node not created');
       return;
     }
   }
@@ -2143,14 +2194,14 @@
       choosePorkchopCell(departureIndex, durationIndex);
       return;
     }
-    showToast('请先运行 Porkchop 解算');
+    showToast('Run the porkchop solver first');
   }
   chart.addEventListener('pointerdown', event => { chart.setPointerCapture(event.pointerId); selectPorkchop(event.clientX, event.clientY); });
   chart.addEventListener('pointermove', event => { if (chart.hasPointerCapture(event.pointerId)) selectPorkchop(event.clientX, event.clientY); });
   $('#lowestDv').addEventListener('click', () => {
     if (state.porkchopResult) choosePorkchopCell(state.porkchopResult.bestDepartureIndex, state.porkchopResult.bestDurationIndex);
-    else { showToast('请先运行 Porkchop 解算'); return; }
-    showToast('已选择最低 Δv 解');
+    else { showToast('Run the porkchop solver first'); return; }
+    showToast('Selected lowest delta-v solution');
   });
   $('#asapTransfer').addEventListener('click', () => {
     if (state.porkchopResult) {
@@ -2162,17 +2213,17 @@
         if (Number.isFinite(cost) && cost < bestCost) { bestCost = cost; bestDuration = y; }
       }
       choosePorkchopCell(0, bestDuration);
-    } else { showToast('请先运行 Porkchop 解算'); return; }
-    showToast('已选择最早出发列中的最低 Δv 解');
+    } else { showToast('Run the porkchop solver first'); return; }
+    showToast('Selected lowest delta-v solution in the earliest departure column');
   });
 
   function requestPorkchopSolve() {
     const targetPeriapsis = Number($('.transfer-options input')?.value || 60) * 1000;
     state.porkchopResult = null;
     $('#porkHeatmap').setAttribute('opacity', '0');
-    $('#porkDeparture').textContent = '解算中';
+    $('#porkDeparture').textContent = 'Solving';
     $('#porkDuration').textContent = '—';
-    $('#porkEjection').textContent = '节点创建时生成';
+    $('#porkEjection').textContent = 'Generated when node is created';
     $('#porkCapture').textContent = '—';
     $('#porkTotal').textContent = '—';
     if (!sendCommand('mechjeb.porkchop.solve', {
@@ -2180,20 +2231,20 @@
       height: 200,
       includeCaptureBurn: $('#captureBurn').checked,
       targetPeriapsis
-    })) showToast('实时连接不可用，未启动 Porkchop 解算');
+    })) showToast('No live connection; porkchop solver not started');
   }
-  $('#resetPorkchop').textContent = '重新解算';
+  $('#resetPorkchop').textContent = 'Recompute';
   $('#resetPorkchop').addEventListener('click', requestPorkchopSolve);
   $('#captureBurn').addEventListener('change', requestPorkchopSolve);
 
   function createPorkchop(execute) {
-    if (!state.porkchopResult) { showToast('请先完成 Porkchop 解算'); return; }
+    if (!state.porkchopResult) { showToast('Complete the porkchop calculation first'); return; }
     if (!sendCommand('mechjeb.porkchop.create', {
       departureIndex: state.porkchopDepartureIndex,
       durationIndex: state.porkchopDurationIndex,
       replaceLast: Boolean($('.node-mode button:nth-child(2).is-active')),
       execute
-    })) { showToast('实时连接不可用，未创建转移节点'); return; }
+    })) { showToast('No live connection; transfer node not created'); return; }
   }
   $('#createPorkchop').addEventListener('click', () => createPorkchop(false));
   $('#createExecutePorkchop').addEventListener('click', () => createPorkchop(true));
@@ -2224,7 +2275,7 @@
     const labels = { GRAVITYTURN: 'GRAVITY TURN', PVG: 'PRIMER VECTOR GUIDANCE', CLASSIC: 'CLASSIC ASCENT' };
     $('#ascentPathSettingsLabel').textContent = labels[path] || path;
     $$('.pvg-target-only').forEach(element => { element.hidden = path !== 'PVG'; });
-    $('#ascentOrbitAltitudeLabel').textContent = path === 'PVG' ? '目标近拱点 PE' : '目标轨道高度';
+    $('#ascentOrbitAltitudeLabel').textContent = path === 'PVG' ? 'Target periapsis PE' : 'Target orbit altitude';
     const launchMode = $('#ascentLaunchMode');
     const targetLanOption = Array.from(launchMode.options).find(option => option.value === 'TARGET_LAN');
     const rendezvousOption = Array.from(launchMode.options).find(option => option.value === 'RENDEZVOUS');
@@ -2251,7 +2302,7 @@
     if (!svg) return;
     const layer = svg.querySelector('.live-orbit-geometry');
     if (!geometry || !(geometry.radius > 0)) {
-      layer.innerHTML = '<text x="30" y="195" fill="#8ea8ad">等待实际轨道数据</text>';
+      layer.innerHTML = '<text x=\"30\" y=\"195\" fill=\"#8ea8ad\">Waiting for actual orbit data</text>';
       return;
     }
     const valid = p => Array.isArray(p) && p.length >= 3 && p.every(Number.isFinite);
@@ -2287,10 +2338,10 @@
       const node=screen(project(geometry.node));
       markup += `<circle cx="${node[0]}" cy="${node[1]}" r="7" fill="none" stroke="#ffcf73" stroke-width="2"/>`;
     }
-    markup += `<text x="20" y="325" fill="#c9d8da">${wholeBody ? '青色：当前 · 金色虚线：首节点后 · 白点：载具' : '金色：Trajectories 预测 · 白点：载具'}</text>`;
-    markup += '<text x="20" y="342" fill="#8ea8ad">本天体范围 · 轨道平面斜投影 · 自动等比缩放</text>';
-    if (!hasPaths) markup += '<text x="20" y="359" fill="#c9d8da">暂无可绘制的预测轨迹</text>';
-    else if (wholeBody && !geometry.plannedAvailable) markup += '<text x="20" y="350" fill="#c9d8da">无同一天体的节点后轨道</text>';
+    markup += `<text x="20" y="325" fill="#c9d8da">${wholeBody ? 'Cyan: current · Dashed gold: after first node · White: vessel' : 'Gold: Trajectories prediction · White: vessel'}</text>`;
+    markup += '<text x=\"20\" y=\"342\" fill=\"#8ea8ad\">Current body only · oblique orbital projection · uniform auto scale</text>';
+    if (!hasPaths) markup += '<text x=\"20\" y=\"359\" fill=\"#c9d8da\">No trajectory samples to draw</text>';
+    else if (wholeBody && !geometry.plannedAvailable) markup += '<text x=\"20\" y=\"350\" fill=\"#c9d8da\">No post-node orbit around the same body</text>';
     layer.innerHTML=markup;
   }
 
@@ -2334,7 +2385,7 @@
     $('#ascentTargetBody').setAttribute('r', bodyRadius.toFixed(2));
     $('#ascentTargetBody').setAttribute('cy', String(focusY));
     $('.ascent-target-focus').setAttribute('cy', String(focusY));
-    $('#ascentTargetOrbit').setAttribute('aria-label', `目标轨道：近拱点 ${periapsisKm.toFixed(1)} 千米，远拱点 ${apoapsisKm.toFixed(1)} 千米，倾角 ${inclination.toFixed(1)} 度`);
+    $('#ascentTargetOrbit').setAttribute('aria-label', `Target orbit: periapsis ${periapsisKm.toFixed(1)} km, apoapsis ${apoapsisKm.toFixed(1)} km, inclination ${inclination.toFixed(1)} degrees`);
   }
 
 
@@ -2376,7 +2427,7 @@
     if (!svg) return;
     const valid = p => Array.isArray(p) && p.length === 3 && p.every(Number.isFinite);
     if (!geometry || !(geometry.radius > 0) || !valid(geometry.craft)) {
-      svg.innerHTML = '<text x="24" y="190" fill="#8ea8ad">等待真实空间坐标</text>';
+      svg.innerHTML = '<text x=\"24\" y=\"190\" fill=\"#8ea8ad\">Waiting for spatial coordinates</text>';
       state.ascentSpatialRenderKey = null;
       return;
     }
@@ -2424,9 +2475,9 @@
     if(predicted.length>1) markup+=`<path data-series="coast" d="${path(predicted)}" fill="none" stroke="#99bafa" stroke-width="2" stroke-dasharray="8 5"/>`;
     if(flown.length>1) markup+=`<path data-series="flown" d="${path(flown)}" fill="none" stroke="#67d8d4" stroke-width="2.5"/>`;
     markup+=`<circle cx="${craft[0]}" cy="${craft[1]}" r="5" fill="#fff" stroke="#081b21" stroke-width="2"/>`;
-    markup+=`<text x="24" y="24" fill="#d6e6e8">高度 ${((Math.hypot(...geometry.craft)-geometry.radius)/1000).toFixed(1)} km · 白点为位置，不代表姿态</text>`;
-    markup+=`<path d="M24 337h100m-100-4v8m100-8v8" stroke="#bcd0d4"/><text x="24" y="359" fill="#bcd0d4">${(100/scale/1000).toFixed(1)} km · 横纵等比例</text>`;
-    if(flown.length<2) markup+='<text x="400" y="359" fill="#8ea8ad">开始采集本页实际航迹…</text>';
+    markup+=`<text x="24" y="24" fill="#d6e6e8">Altitude ${((Math.hypot(...geometry.craft)-geometry.radius)/1000).toFixed(1)} km · White marker shows position, not attitude</text>`;
+    markup+=`<path d="M24 337h100m-100-4v8m100-8v8" stroke="#bcd0d4"/><text x="24" y="359" fill="#bcd0d4">${(100/scale/1000).toFixed(1)} km · Equal horizontal and vertical scale</text>`;
+    if(flown.length<2) markup+='<text x=\"400\" y=\"359\" fill=\"#8ea8ad\">Recording observed flight path…</text>';
     svg.innerHTML=markup;
   }
 
@@ -2448,8 +2499,8 @@
     $('#ascentReadoutInclination').textContent = Number.isFinite(inclination) ? `${inclination.toFixed(1)}°` : '—';
     $('#ascentReadoutPath').textContent = pathLabels[path] || path;
     const launchModeLabels = {
-      IMMEDIATE: '立即发射', COUNTDOWN: '手动倒计时', TARGET_PLANE: '发射至目标轨道面',
-      TARGET_LAN: '发射至目标 LAN', RENDEZVOUS: '发射至交会'
+      IMMEDIATE: 'Launch now', COUNTDOWN: 'Manual countdown', TARGET_PLANE: 'Launch into target plane',
+      TARGET_LAN: 'Launch to target LAN', RENDEZVOUS: 'Launch to rendezvous'
     };
     const launchMode = String($('#ascentLaunchMode').value || 'IMMEDIATE').toUpperCase();
     $('#ascentReadoutLaunchMode').textContent = launchModeLabels[launchMode] || launchMode;
@@ -2569,19 +2620,19 @@
       maxClosingSpeed: numeric('#rendezvousClosingSpeed')
     };
     if (!(parameters.desiredDistance > 0) || !(parameters.maxPhasingOrbits >= 1) || !(parameters.maxClosingSpeed > 0)) {
-      showToast('请检查交汇距离、相位轨道数和接近速度');
+      showToast('Check rendezvous distance, phasing orbits and approach speed');
       return;
     }
-    if (!sendCommand('mechjeb.rendezvous.start', parameters)) showToast('实时连接不可用，未启动自动交汇');
+    if (!sendCommand('mechjeb.rendezvous.start', parameters)) showToast('No live connection; rendezvous not started');
   });
 
   const smartAssGroups = {
-    '轨道': new Set(['关闭', '姿态稳定', '节点', '顺向', '逆向', '法向 +', '法向 −', '径向外', '径向内']),
-    '地面': new Set(['关闭', '姿态稳定', '地面', '地速 +', '地速 −', '水平速度 +', '水平速度 −', '上']),
-    '目标': new Set(['关闭', '姿态稳定', '相对速度 +', '相对速度 −', '目标 +', '目标 −', '正轨道平面', '反轨道平面'])
+    'Orbit': new Set(['Off', 'Kill rotation', 'Nodes', 'Prograde', 'Retrograde', 'Normal +', 'Normal −', 'Radial out', 'Radial in']),
+    'Surface': new Set(['Off', 'Kill rotation', 'Surface', 'Surface prograde', 'Surface retrograde', 'Horizontal +', 'Horizontal −', 'Up']),
+    'Target': new Set(['Off', 'Kill rotation', 'Relative velocity +', 'Relative velocity −', 'Target +', 'Target −', 'Parallel +', 'Parallel −'])
   };
   function applySmartAssGroup(name) {
-    const allowed = smartAssGroups[name] || smartAssGroups['轨道'];
+    const allowed = smartAssGroups[name] || smartAssGroups['Orbit'];
     $$('.attitude-grid button').forEach(button => { button.hidden = !allowed.has(sourceText(button).trim()); });
     const selected = $('.attitude-grid button.is-active:not([hidden])');
     if (!selected) {
@@ -2595,20 +2646,20 @@
       applySmartAssGroup(sourceText(button).trim());
     });
   });
-  applySmartAssGroup('轨道');
+  applySmartAssGroup('Orbit');
 
   function syncSmartAssOffsets(refreshValues = false) {
     const selected = sourceText($('.attitude-grid button.is-active')).trim();
-    const supportsPitchYaw = ['地面', '地速 +', '地速 −'].includes(selected);
+    const supportsPitchYaw = ['Surface', 'Surface prograde', 'Surface retrograde'].includes(selected);
     $$('.attitude-offset input').slice(0, 2).forEach(input => {
       input.disabled = !supportsPitchYaw;
-      input.title = supportsPitchYaw ? '' : '该 Smart A.S.S. 模式只支持 Roll 偏移';
+      input.title = supportsPitchYaw ? '' : 'This Smart A.S.S. mode only supports roll offset';
       input.closest('.smart-offset-control')?.querySelectorAll('button').forEach(button => { button.disabled = !supportsPitchYaw; });
     });
     const telemetry = state.smartAssTelemetry;
     if (refreshValues && telemetry) {
-      const keys = selected === '地面' ? ['smartAssSurfacePitch', 'smartAssSurfaceYaw', 'smartAssSurfaceRoll']
-        : ['地速 +', '地速 −'].includes(selected) ? ['smartAssVelocityPitch', 'smartAssVelocityYaw', 'smartAssVelocityRoll']
+      const keys = selected === 'Surface' ? ['smartAssSurfacePitch', 'smartAssSurfaceYaw', 'smartAssSurfaceRoll']
+        : ['Surface prograde', 'Surface retrograde'].includes(selected) ? ['smartAssVelocityPitch', 'smartAssVelocityYaw', 'smartAssVelocityRoll']
         : [null, null, 'smartAssRoll'];
       $$('.attitude-offset input').forEach((input, index) => {
         if (document.activeElement === input) return;
@@ -2626,24 +2677,24 @@
       state.smartAssPendingTarget = null;
       state.smartAssPendingCommandId = null;
       syncSmartAssOffsets(true);
-      showToast(`已选择 Smart A.S.S.：${sourceText(button).trim()}`);
+      showToast(`Selected Smart A.S.S.:${sourceText(button).trim()}`);
     });
   });
 
   const smartAssTargets = {
-    '关闭': 'OFF', '姿态稳定': 'KILLROT', '节点': 'NODE', '地面': 'SURFACE',
-    '顺向': 'PROGRADE', '逆向': 'RETROGRADE', '法向 +': 'NORMAL_PLUS', '法向 −': 'NORMAL_MINUS',
-    '径向外': 'RADIAL_PLUS', '径向内': 'RADIAL_MINUS', '相对速度 +': 'RELATIVE_PLUS', '相对速度 −': 'RELATIVE_MINUS',
-    '目标 +': 'TARGET_PLUS', '目标 −': 'TARGET_MINUS', '正轨道平面': 'PARALLEL_PLUS', '反轨道平面': 'PARALLEL_MINUS',
-    '地速 +': 'SURFACE_PROGRADE', '地速 −': 'SURFACE_RETROGRADE', '水平速度 +': 'HORIZONTAL_PLUS',
-    '水平速度 −': 'HORIZONTAL_MINUS', '上': 'VERTICAL_PLUS'
+    'Off': 'OFF', 'Kill rotation': 'KILLROT', 'Nodes': 'NODE', 'Surface': 'SURFACE',
+    'Prograde': 'PROGRADE', 'Retrograde': 'RETROGRADE', 'Normal +': 'NORMAL_PLUS', 'Normal −': 'NORMAL_MINUS',
+    'Radial out': 'RADIAL_PLUS', 'Radial in': 'RADIAL_MINUS', 'Relative velocity +': 'RELATIVE_PLUS', 'Relative velocity −': 'RELATIVE_MINUS',
+    'Target +': 'TARGET_PLUS', 'Target −': 'TARGET_MINUS', 'Parallel +': 'PARALLEL_PLUS', 'Parallel −': 'PARALLEL_MINUS',
+    'Surface prograde': 'SURFACE_PROGRADE', 'Surface retrograde': 'SURFACE_RETROGRADE', 'Horizontal +': 'HORIZONTAL_PLUS',
+    'Horizontal −': 'HORIZONTAL_MINUS', 'Up': 'VERTICAL_PLUS'
   };
 
   function executeSmartAss(requireAttitudeTarget = false) {
     const selected = sourceText($('.attitude-grid button.is-active')).trim();
     const target = smartAssTargets[selected];
     if (!target || (requireAttitudeTarget && target === 'OFF')) {
-      showToast('请先选择要执行的 Smart A.S.S. 姿态');
+      showToast('Select a Smart A.S.S. attitude first');
       return false;
     }
     const offsets = $$('.attitude-offset input').map(input => Number(String(input.value).replace('−', '-').replace(/[^0-9+\.\-]/g, '')) || 0);
@@ -2657,7 +2708,7 @@
       state.smartAssPendingCommandId = commandId;
       return true;
     } else {
-      showToast('实时连接不可用，未发送 Smart A.S.S. 命令');
+      showToast('No live connection; Smart A.S.S. command not sent');
       return false;
     }
   }
@@ -2681,7 +2732,7 @@
       const delta = Number(button.dataset.smartOffsetDelta) || 0;
       const next = current + delta * state.smartAssOffsetStep;
       input.value = `${next.toFixed(1)}°`;
-      if (executeSmartAss(true)) showToast(`姿态偏移已更新：${input.id.replace('smart', '').replace('Offset', '')} ${input.value}`);
+      if (executeSmartAss(true)) showToast(`Attitude offsets updated:${input.id.replace('smart', '').replace('Offset', '')} ${input.value}`);
     });
   });
 
@@ -2714,7 +2765,7 @@
   }
   function configureLanding() {
     updateLandingOptionAvailability();
-    if (!sendCommand('mechjeb.landing.configure', landingParameters(), true)) showToast('实时连接不可用，未更新自动着陆设置');
+    if (!sendCommand('mechjeb.landing.configure', landingParameters(), true)) showToast('No live connection; landing settings not updated');
   }
   [
     '#landingDeployGears', '#landingGearStageLimit', '#landingDeployChutes', '#landingChuteStageLimit',
@@ -2727,13 +2778,13 @@
     return { latitude: parseCoordinate(inputs[0]?.value), longitude: parseCoordinate(inputs[1]?.value) };
   }
   $('#setLandingTarget').addEventListener('click', () => {
-    if (!sendCommand('mechjeb.landing.setTarget', landingCoordinates())) showToast('实时连接不可用，未设置着陆目标');
+    if (!sendCommand('mechjeb.landing.setTarget', landingCoordinates())) showToast('No live connection; landing target not set');
   });
   $('#landUntargeted').addEventListener('click', () => {
-    if (!sendCommand('mechjeb.landing.untargeted', landingParameters())) showToast('实时连接不可用，未启动自动着陆');
+    if (!sendCommand('mechjeb.landing.untargeted', landingParameters())) showToast('No live connection; landing not started');
   });
   $('#landAtTarget').addEventListener('click', () => {
-    if (!sendCommand('mechjeb.landing.setTarget', landingCoordinates()) || !sendCommand('mechjeb.landing.target', landingParameters())) showToast('实时连接不可用，未启动目标着陆');
+    if (!sendCommand('mechjeb.landing.setTarget', landingCoordinates()) || !sendCommand('mechjeb.landing.target', landingParameters())) showToast('No live connection; targeted landing not started');
   });
   function dockingParameters() {
     const numeric = selector => Number(String($(selector)?.value || '').replace('−', '-').replace(/[^0-9+\.\-]/g, ''));
@@ -2755,14 +2806,14 @@
   }
   function configureDocking() {
     updateDockingOptionAvailability();
-    if (!sendCommand('mechjeb.docking.configure', dockingParameters(), true)) showToast('实时连接不可用，未更新自动对接设置');
+    if (!sendCommand('mechjeb.docking.configure', dockingParameters(), true)) showToast('No live connection; docking settings not updated');
   }
   [
     '#dockingSpeedLimit', '#dockingSafeDistance', '#dockingStartDistance', '#dockingRoll',
     '#dockingOverrideSafeDistance', '#dockingOverrideStartDistance', '#dockingForceRoll', '#dockingDrawBoundingBox'
   ].forEach(selector => $(selector)?.addEventListener('change', configureDocking));
   $('#startDocking').addEventListener('click', () => {
-    if (!sendCommand('mechjeb.docking.start', dockingParameters())) showToast('实时连接不可用，未启动自动对接');
+    if (!sendCommand('mechjeb.docking.start', dockingParameters())) showToast('No live connection; docking not started');
   });
 
   $$('[data-command]').forEach(button => button.addEventListener('click', () => {
@@ -2770,7 +2821,7 @@
       if (button.dataset.confirmArmed !== 'true') {
         button.dataset.confirmArmed = 'true';
         button.dataset.originalText = sourceText(button);
-        button.textContent = '再次点击确认';
+        button.textContent = 'Click again to confirm';
         clearTimeout(button._confirmTimer);
         button._confirmTimer = setTimeout(() => {
           button.dataset.confirmArmed = 'false';
@@ -2782,7 +2833,7 @@
       button.dataset.confirmArmed = 'false';
       button.textContent = button.dataset.originalText;
     }
-    if (!sendCommand(button.dataset.command)) showToast('实时连接不可用，命令未发送');
+    if (!sendCommand(button.dataset.command)) showToast('No live connection; command not sent');
   }));
 
   $$('.auto-action').forEach(button => button.addEventListener('click', () => showToast(button.dataset.autoAction)));
@@ -2794,7 +2845,7 @@
       $$('.axis-toggle button').forEach(item => item.classList.toggle('is-active', item === button));
       state.recorderDirty = true;
       state.recorderRenderedAt = 0;
-      showToast(button.dataset.axis === 'range' ? '横轴已切换为下行距离' : '横轴已切换为飞行时间');
+      showToast(button.dataset.axis === 'range' ? 'X axis set to downrange' : 'X axis set to flight time');
     });
   });
 
@@ -2831,22 +2882,22 @@
 
   $('#pauseButton').addEventListener('click', event => {
     state.paused = !state.paused;
-    event.currentTarget.textContent = state.paused ? '▶ 恢复' : 'Ⅱ 暂停';
-    $('#recState').textContent = state.paused ? '显示已暂停' : '记录中';
+    event.currentTarget.textContent = state.paused ? '▶ Resume' : 'Ⅱ Pause';
+    $('#recState').textContent = state.paused ? 'Display paused' : 'Recording';
     $('.rec-dot').style.animationPlayState = state.paused ? 'paused' : 'running';
     if (!state.paused) fetchRecorderHistory();
-    showToast(state.paused ? '曲线显示已暂停，游戏内记录继续' : '曲线已恢复并同步遗漏样本');
+    showToast(state.paused ? 'Chart paused; in-game recording continues' : 'Chart resumed and missing samples synchronized');
   });
 
   $('#clearRecorder').addEventListener('click', () => {
-    if (!sendCommand('mechjeb.recorder.clear')) showToast('实时连接不可用，未清除记录');
+    if (!sendCommand('mechjeb.recorder.clear')) showToast('No live connection; recording not cleared');
   });
   $('#exportRecorder').addEventListener('click', () => {
     const link = document.createElement('a');
     link.href = apiUrl('/api/v1/recorder.csv');
     link.download = `ArmorControl-FlightRecorder-${new Date().toISOString().replace(/[:.]/g, '-')}.csv`;
     link.click();
-    showToast('正在导出当前 Flight Recorder 历史');
+    showToast('Exporting Flight Recorder history');
   });
 
   $$('.mode-selector button').forEach(button => {
@@ -2864,10 +2915,10 @@
         disconnectVesselImage();
       } else {
         connectVesselImage();
-        if (!sendCommand('vessel.view.mode', { mode: button.dataset.mode })) showToast('实时连接不可用，未切换载具着色');
+        if (!sendCommand('vessel.view.mode', { mode: button.dataset.mode })) showToast('No live connection; vessel coloring not changed');
       }
       $('.heat-legend').hidden = button.dataset.mode !== 'heat';
-      showToast(`载具视图：${button.textContent}`);
+      showToast(`Vessel view: ${sourceText(button)}`);
     });
   });
 
@@ -2887,10 +2938,10 @@
     if (action === 'rotate') {
       if ($('#vehicleSvg').hidden) {
         const labels = ['ISOMETRIC', 'XY', 'XZ', 'YZ'];
-        const current = $('#vesselViewLabel').textContent.replace('VIEW / ', '');
+        const current = sourceText($('#vesselViewLabel')).replace('VIEW / ', '');
         const next = labels[(Math.max(0, labels.indexOf(current)) + 1) % labels.length];
         $('#vesselViewLabel').textContent = `VIEW / ${next}`;
-        if (!sendCommand('vessel.view.rotate')) showToast('实时连接不可用，未切换观察方向');
+        if (!sendCommand('vessel.view.rotate')) showToast('No live connection; view direction not changed');
       } else vesselCanvasRotation = (vesselCanvasRotation + 90) % 360;
     }
     if (action === 'fit') {
@@ -2925,13 +2976,13 @@
       const system = systemCommands[index];
       const command = system === 'solar' ? 'vessel.solar.toggle' : system === 'antenna' ? 'vessel.antenna.toggle' : system === 'autostage' ? 'mechjeb.autostage.toggle' : 'vessel.system.toggle';
       const parameters = command === 'vessel.system.toggle' ? { system } : {};
-      if (!sendCommand(command, parameters)) showToast('实时连接不可用，系统命令未发送');
+      if (!sendCommand(command, parameters)) showToast('No live connection; system command not sent');
     });
   });
 
   $$('.action-pad button').forEach((button, index) => {
     button.addEventListener('click', () => {
-      if (!sendCommand('vessel.actionGroup.toggle', { group: index + 1 })) showToast('实时连接不可用，动作组命令未发送');
+      if (!sendCommand('vessel.actionGroup.toggle', { group: index + 1 })) showToast('No live connection; action group command not sent');
     });
   });
 
@@ -2966,8 +3017,8 @@
     controlThrottleValue.textContent = state.control.throttleLocked ? 'MJ LOCK' : `${Math.round(state.control.throttle * 100)}%`;
     controlThrottle.classList.toggle('is-locked', state.control.throttleLocked);
     controlThrottle.setAttribute('aria-disabled', state.control.throttleLocked ? 'true' : 'false');
-    controlThrottle.title = state.control.throttleLocked ? 'MechJeb 正在执行自动发射、节点或自动着陆，网页油门已锁定' : '';
-    releaseControl.textContent = state.control.engaged ? '控制中 · 解除' : '已解除';
+    controlThrottle.title = state.control.throttleLocked ? 'MechJeb Web throttle locked during ascent, node execution or landing' : '';
+    releaseControl.textContent = state.control.engaged ? 'Controlling · release' : 'Released';
     releaseControl.classList.toggle('is-armed', state.control.engaged);
   }
 
@@ -2980,7 +3031,7 @@
   }
 
   function armContinuousControl() {
-    if (state.connection !== 'live') { showToast('实时连接不可用，连续控制未启用'); return false; }
+    if (state.connection !== 'live') { showToast('No live connection; continuous control not enabled'); return false; }
     state.control.engaged = true;
     if (!state.controlTimer) state.controlTimer = setInterval(sendContinuousControl, 100);
     updateControlDisplay();
@@ -3061,7 +3112,7 @@
   controlThrottle.addEventListener('pointerdown', event => {
     event.preventDefault();
     if (state.control.throttleLocked) {
-      showToast('MechJeb 正在控制推力：自动发射、节点执行或自动着陆结束后才能调节油门');
+      showToast('MechJeb is controlling thrust. Throttle becomes available after ascent, node execution or landing ends.');
       return;
     }
     if (!armContinuousControl()) return;
@@ -3077,13 +3128,13 @@
   updateControlDisplay();
 
   bindSlideConfirmation($('#holdStage'), $('#stageSlideConfirm'), () => {
-    if (!sendCommand('vessel.stage')) showToast('实时连接不可用，未执行分级');
+    if (!sendCommand('vessel.stage')) showToast('No live connection; stage not activated');
   });
   bindSlideConfirmation($('#holdQuickload'), $('#quickloadSlideConfirm'), () => {
-    if (!sendCommand('game.quicksave.load')) showToast('实时连接不可用，未加载 quicksave');
+    if (!sendCommand('game.quicksave.load')) showToast('No live connection; quicksave not loaded');
   });
   bindSlideConfirmation($('#ascentStageTrigger'), $('#ascentStageSlideConfirm'), () => {
-    if (!sendCommand('vessel.stage')) showToast('实时连接不可用，未执行分级');
+    if (!sendCommand('vessel.stage')) showToast('No live connection; stage not activated');
   });
 
   const lerp = (from, to, amount) => from + (to - from) * amount;
@@ -3184,7 +3235,7 @@
     const heading = ((angleValue('heading') % 360) + 360) % 360;
     drawNavball($('#flightNavball'), pitch, roll, heading, false);
     drawNavball($('#smartNavball'), pitch, roll, heading, true);
-    $('#surfaceSpeed').textContent = Math.round(speed).toLocaleString('zh-CN');
+    $('#surfaceSpeed').textContent = Math.round(speed).toLocaleString(uiLocale());
     $('#radarAlt').textContent = radarKilometers.toFixed(radarKilometers < 10 ? 2 : 1);
     $('#verticalSpeed').textContent = signed(value('verticalSpeed'));
     $('#headingValue').textContent = `${heading.toFixed(1)}°`;
@@ -3208,7 +3259,7 @@
     $('#smartRoll').textContent = `${signed(roll)}°`;
     const speedStep = speed < 20 ? 1 : speed < 200 ? 10 : speed < 2000 ? 25 : 50;
     const speedTicks = [speed - speedStep * 2, speed - speedStep, speed + speedStep, speed + speedStep * 2];
-    $$('.tape-left .tape-scale i').forEach((tick, index) => { tick.textContent = speedTicks[index] < 0 ? '—' : Math.round(speedTicks[index]).toLocaleString('zh-CN'); });
+    $$('.tape-left .tape-scale i').forEach((tick, index) => { tick.textContent = speedTicks[index] < 0 ? '—' : Math.round(speedTicks[index]).toLocaleString(uiLocale()); });
     const altitudeStep = radarKilometers < 1 ? .01 : radarKilometers < 20 ? .1 : radarKilometers < 200 ? .2 : 1;
     const altitudeTicks = [radarKilometers - altitudeStep * 2, radarKilometers - altitudeStep, radarKilometers + altitudeStep, radarKilometers + altitudeStep * 2];
     $$('.tape-right .tape-scale i').forEach((tick, index) => { tick.textContent = Math.max(0, altitudeTicks[index]).toFixed(altitudeStep < .1 ? 2 : 1); });
@@ -3217,12 +3268,12 @@
     $$('.heading-band span').forEach((tick, index) => { tick.textContent = Math.round(wrapHeading(headingTicks[index])).toString().padStart(3, '0'); });
 
     if (now - state.lastTelemetryAt > 1000 && state.connection === 'live') {
-      setConnectionState('stale', '遥测延迟', `快速遥测 ${(now - state.lastTelemetryAt).toFixed(0)} ms 前`);
+      setConnectionState('stale', 'Telemetry delayed', `Fast telemetry ${(now - state.lastTelemetryAt).toFixed(0)} ms ago`);
     }
   }
 
   function initializeUnavailableState() {
-    const set = (selector, value = '—') => { const element = $(selector); if (element) element.textContent = value; };
+    const set = (selector, value = '—') => { const element = $(selector); if (element) userText(element, null, value); };
     [
       '#activeVesselName', '#surfaceSpeed', '#pitchValue', '#rollValue', '#headingValue', '#radarAlt',
       '#verticalSpeed', '#currentThrust', '#localTwr', '#dynamicPressure', '#gForceValue', '#missionTime',
@@ -3230,49 +3281,49 @@
       '#ascentActualAp', '#ascentActualPe', '#ascentActualInclination', '#ascentActualPeriod', '#ascentActualTimeAp', '#ascentActualTimePe',
       '#totalDeltaV', '#stageDeltaV', '#smartPitch', '#smartHeading', '#smartRoll'
     ].forEach(selector => set(selector));
-    set('#maximumThrust', '等待 Flight Pannel');
-    set('#throttleTwr', '等待 Flight Pannel');
-    set('#flightPanelState', '等待数据');
+    set('#maximumThrust', 'Waiting for Flight Panel');
+    set('#throttleTwr', 'Waiting for Flight Panel');
+    set('#flightPanelState', 'Waiting for data');
     set('#flightPanelRate', 'FAST / REGULAR / MECHJEB');
     set('#sampleCount', '0');
-    set('#recState', '等待样本');
+    set('#recState', 'Waiting for samples');
     $$('.telemetry-ledger .data-cell b, .telemetry-ledger .ledger-feature b, .telemetry-ledger .ledger-feature small, .fp-row > b, .fp-summary b, .chart-now b, .series-chip small')
       .forEach(element => { element.textContent = '—'; });
     $$('.system-switch').forEach(button => {
       button.classList.remove('is-on');
       const status = button.querySelector('small');
-      if (status) status.textContent = '等待载具状态';
+      if (status) status.textContent = 'Waiting for vessel state';
     });
     $$('.action-pad button').forEach(button => button.classList.remove('is-on'));
     ['#crewTotal', '#crewPilots', '#crewEngineers', '#crewScientists', '#crewOccupied', '#crewVesselTotal']
       .forEach(selector => set(selector));
-    set('#crewCapacity', '等待载具');
-    set('#crewVesselName', '等待活动载具');
+    set('#crewCapacity', 'Waiting for vessel');
+    set('#crewVesselName', 'Waiting for active vessel');
     const cabins = $('#crewCabins');
-    if (cabins) cabins.innerHTML = '<div class="cabin-count"><span>等待舱位数据</span><b>—</b></div>';
+    if (cabins) cabins.innerHTML = '<div class=\"cabin-count\"><span>Waiting for compartment data</span><b>—</b></div>';
     const manifest = $('#crewManifest');
-    if (manifest) manifest.innerHTML = '<article class="crew-row"><div class="crew-identity"><p><b>等待载具成员数据</b><small>连接 KSP 后自动载入</small></p></div></article>';
+    if (manifest) manifest.innerHTML = '<article class=\"crew-row\"><div class=\"crew-identity\"><p><b>Waiting for crew data</b><small>Loads automatically after connecting to KSP</small></p></div></article>';
     const partIndex = $('#partIndexList');
-    if (partIndex) partIndex.innerHTML = '<div class="part-index-item"><span><b>等待载具结构</b><small>连接 KSP 后自动载入</small></span></div>';
-    set('#partName', '等待零件数据');
-    set('#part-action-title', '等待零件数据');
-    set('#partActionMeta', '连接 KSP 后显示所选零件操作');
+    if (partIndex) partIndex.innerHTML = '<div class=\"part-index-item\"><span><b>Waiting for vessel structure</b><small>Loads automatically after connecting to KSP</small></span></div>';
+    set('#partName', 'Waiting for part data');
+    set('#part-action-title', 'Waiting for part data');
+    set('#partActionMeta', 'Selected part actions appear after connecting to KSP');
     const inspector = $('.part-inspector');
     if (inspector) {
-      set('.part-inspector header small', '连接 KSP 后自动载入');
+      set('.part-inspector header small', 'Loads automatically after connecting to KSP');
       $$('.part-inspector .part-health b, .part-inspector .part-health small, .part-inspector .part-facts dd').forEach(element => { element.textContent = '—'; });
       const resources = inspector.querySelector('.resource-stack');
-      if (resources) resources.innerHTML = '<h3>资源</h3><p class="setup-note">等待所选零件资源</p>';
+      if (resources) resources.innerHTML = '<h3>Resources</h3><p class=\"setup-note\">Waiting for selected part resources</p>';
     }
     const plannerTarget = $('.planner-status .mode-chip');
-    if (plannerTarget) plannerTarget.innerHTML = '<i></i> 目标：等待 KSP';
+    if (plannerTarget) plannerTarget.innerHTML = '<i></i> Target: waiting for KSP';
     set('.planner-status > b', '0 NODES');
-    set('#plannerCurrentApsides', '等待遥测');
-    set('#plannerNodeMapLabel', '等待 KSP 节点');
+    set('#plannerCurrentApsides', 'Waiting for telemetry');
+    set('#plannerNodeMapLabel', 'Waiting for KSP node');
     set('#nodeQueueCount', '0 QUEUED');
-    set('#porkDeparture', '等待解算');
+    set('#porkDeparture', 'Waiting for solution');
     set('#porkDuration'); set('#porkTotal'); set('#porkCapture');
-    set('#porkEjection', '节点创建时生成');
+    set('#porkEjection', 'Generated when node is created');
     $('#porkHeatmap').setAttribute('opacity', '0');
     $$('.porkchop-chart .contour').forEach(path => { path.style.display = 'none'; });
     $('#vehicleConnections').innerHTML = '';
@@ -3281,7 +3332,7 @@
     set('#vesselSelectedName', 'WAITING');
     $$('[data-operation-state]').forEach(row => {
       row.querySelector('.operation-light')?.classList.remove('is-on');
-      const detail = row.querySelector('small'); if (detail) detail.textContent = '等待状态';
+      const detail = row.querySelector('small'); if (detail) detail.textContent = 'Waiting for state';
     });
     drawNavball($('#flightNavball'), 0, 0, 0, false);
     drawNavball($('#smartNavball'), 0, 0, 0, true);

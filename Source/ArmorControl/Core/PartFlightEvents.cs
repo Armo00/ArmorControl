@@ -15,24 +15,24 @@ namespace ArmorOverhaul.ArmorControl.Core
         }
 
         private static readonly Binding[] Bindings = {
-            new Binding("LaunchClamp", "Release", "clamp", "发射架", "释放 / Release"),
-            new Binding("RealChuteModule", "GUIDeploy", "parachute", "RealChute 降落伞 / 减速伞", "开伞"),
-            new Binding("RealChuteModule", "GUIArm", "parachute", "RealChute 降落伞 / 减速伞", "预备开伞"),
-            new Binding("RealChuteModule", "GUIDisarm", "parachute", "RealChute 降落伞 / 减速伞", "取消预备"),
-            new Binding("RealChuteModule", "GUICut", "parachute", "RealChute 降落伞 / 减速伞", "切断伞绳"),
-            new Binding("ModuleActiveRadiator", "Activate", "radiator", "散热器", "启动散热"),
-            new Binding("ModuleActiveRadiator", "Shutdown", "radiator", "散热器", "停止散热"),
-            new Binding("ModuleDeployableRadiator", "Extend", "radiator", "可展开散热器", "展开散热器"),
-            new Binding("ModuleDeployableRadiator", "Retract", "radiator", "可展开散热器", "收起散热器"),
-            new Binding("ModuleProceduralFairing", "DeployFairing", "fairing", "整流罩", "分离整流罩"),
-            new Binding("ModuleJettison", "Jettison", "fairing", "可抛弃护罩", "抛弃护罩"),
-            new Binding("ProceduralFairingDecoupler", "OnJettisonFairing", "fairing", "Procedural Fairings", "分离整流罩"),
-            new Binding("ProceduralFairingSide", "TogglePetals", "fairing", "Procedural Fairings", "花瓣开合 / Petals"),
-            new Binding("ModuleSimpleAdjustableFairing", "DeployEvent", "fairing", "Simple Adjustable Fairings", "分离整流罩"),
-            new Binding("ModuleDecouplerBase", "Decouple", "decoupler", "分离器", "分离"),
-            new Binding("ModuleDockingNode", "Undock", "docking", "对接口", "解除对接"),
-            new Binding("ModuleDockingNode", "UndockSameVessel", "docking", "对接口", "解除同载具对接"),
-            new Binding("ModuleDockingNode", "Decouple", "docking", "对接口", "分离连接")
+            new Binding("LaunchClamp", "Release", "clamp", "Launch clamp", "Release"),
+            new Binding("RealChuteModule", "GUIDeploy", "parachute", "RealChute parachute / drag chute", "Deploy parachute"),
+            new Binding("RealChuteModule", "GUIArm", "parachute", "RealChute parachute / drag chute", "Arm parachute"),
+            new Binding("RealChuteModule", "GUIDisarm", "parachute", "RealChute parachute / drag chute", "Disarm parachute"),
+            new Binding("RealChuteModule", "GUICut", "parachute", "RealChute parachute / drag chute", "Cut parachute"),
+            new Binding("ModuleActiveRadiator", "Activate", "radiator", "Radiator", "Activate cooling"),
+            new Binding("ModuleActiveRadiator", "Shutdown", "radiator", "Radiator", "Stop cooling"),
+            new Binding("ModuleDeployableRadiator", "Extend", "radiator", "Deployable radiator", "Extend radiator"),
+            new Binding("ModuleDeployableRadiator", "Retract", "radiator", "Deployable radiator", "Retract radiator"),
+            new Binding("ModuleProceduralFairing", "DeployFairing", "fairing", "Fairing", "Jettison fairing"),
+            new Binding("ModuleJettison", "Jettison", "fairing", "Jettisonable shroud", "Jettison shroud"),
+            new Binding("ProceduralFairingDecoupler", "OnJettisonFairing", "fairing", "Procedural Fairings", "Jettison fairing"),
+            new Binding("ProceduralFairingSide", "TogglePetals", "fairing", "Procedural Fairings", "Toggle petals"),
+            new Binding("ModuleSimpleAdjustableFairing", "DeployEvent", "fairing", "Simple Adjustable Fairings", "Jettison fairing"),
+            new Binding("ModuleDecouplerBase", "Decouple", "decoupler", "Decoupler", "Decouple"),
+            new Binding("ModuleDockingNode", "Undock", "docking", "Docking ports", "Undock"),
+            new Binding("ModuleDockingNode", "UndockSameVessel", "docking", "Docking ports", "Undock same vessel"),
+            new Binding("ModuleDockingNode", "Decouple", "docking", "Docking ports", "Decouple connection")
         };
 
         private static bool Matches(PartModule module, Binding binding)

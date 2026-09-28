@@ -15,7 +15,7 @@ namespace ArmorOverhaul.ArmorControl.Core
         internal int FastTelemetryHz = 30;
         internal int RegularTelemetryHz = 5;
         internal string AccessToken = string.Empty;
-        internal string Language = "zh-CN";
+        internal string Language = "en-US";
 
         internal static ArmorControlSettings Load(string path, Action<string> warn)
         {
@@ -56,6 +56,26 @@ namespace ArmorOverhaul.ArmorControl.Core
             return settings;
         }
 
+        internal bool TrySaveLanguage(string language, string path, out string error)
+        {
+            if (language != "en-US" && language != "zh-CN")
+            {
+                error = "Unsupported server language.";
+                return false;
+            }
+            string previous = Language;
+            Language = language;
+            try { Save(path); }
+            catch (Exception exception)
+            {
+                Language = previous;
+                error = "Could not save settings: " + exception.Message;
+                return false;
+            }
+            error = null;
+            return true;
+        }
+
         internal void Save(string path)
         {
             string directory = Path.GetDirectoryName(path);
@@ -73,7 +93,14 @@ namespace ArmorOverhaul.ArmorControl.Core
             text.AppendLine("    accessToken = " + AccessToken);
             text.AppendLine("    language = " + Language);
             text.AppendLine("}");
-            File.WriteAllText(path, text.ToString());
+            string temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                File.WriteAllText(temporary, text.ToString());
+                if (File.Exists(path)) File.Replace(temporary, path, null);
+                else File.Move(temporary, path);
+            }
+            finally { if (File.Exists(temporary)) File.Delete(temporary); }
         }
 
         private static int ReadInt(ConfigNode node, string name, int fallback, int minimum, int maximum, Action<string> warn)

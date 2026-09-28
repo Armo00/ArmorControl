@@ -14,7 +14,7 @@ KSP 1.12.5 · 版本 0.1 · 早期测试 · CC BY-NC-SA
 
 Armor Control 把手机、平板或另一台电脑变成 KSP 的远程飞行控制台。通过网页监控载具状态、操作系统、规划机动，并使用已支持的自动驾驶功能。
 
-HTTP/WebSocket 服务直接运行在 KSP 内部，无需额外服务器、kRPC 或专用的 Armor Control 零件。界面支持简体中文和英文，默认简体中文。
+HTTP/WebSocket 服务直接运行在 KSP 内部，无需额外服务器、kRPC 或专用的 Armor Control 零件。界面支持简体中文和英文，由服务端统一选择所有设备使用的语言，默认英文。
 
 ## 听起来有些熟悉？
 
@@ -87,7 +87,7 @@ Armor Control 已独立于 ArmorOverhaul。从旧的集成版本升级时，请�
 
 ### 语言
 
-在网页右上角选择 **简体中文** 或 **English**。选择按浏览器保存，不影响其他设备；游戏内服务面板单独保存语言设置。
+在游戏内 ArmorControl 工具栏面板或网页右上角选择 **简体中文** 或 **English**，两处都修改 KSP 所在电脑 `settings.cfg` 中同一项 `language = zh-CN` 或 `language = en-US`。保存成功后，游戏内面板及全部网页通过 WebSocket 统一更新；新连接和断线重连自动跟随服务端，旧浏览器偏好不再生效。保存失败会保留原语言并显示错误。手动编辑配置时，请先关闭 KSP，下次启动时读取。
 
 欢迎修改 [`prototype/Localization`](prototype/Localization) 中的 JSON 词典，详见[本地化维护说明](prototype/Localization/README.md)。
 

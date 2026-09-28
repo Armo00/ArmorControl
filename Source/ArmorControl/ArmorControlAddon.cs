@@ -198,7 +198,7 @@ namespace ArmorOverhaul.ArmorControl
             ArmorControlServer candidate = null;
             try
             {
-                candidate = new ArmorControlServer(settings.BindAddress, settings.Port, webRoot, bridge, settings.AccessToken);
+                candidate = new ArmorControlServer(settings.BindAddress, settings.Port, webRoot, bridge, settings.AccessToken, settings.Language);
                 candidate.Start();
                 server = candidate;
                 serverStatus = "Server running";
@@ -281,11 +281,16 @@ namespace ArmorOverhaul.ArmorControl
 
         private readonly ArmorControlLocalization localization = new ArmorControlLocalization();
         private string Localize(string source) { return localization.Text(webRoot, settings.Language, source); }
-        private void SelectLanguage(string language)
+        private CommandExecution SelectLanguage(string language)
         {
-            settings.Language = language;
-            try { settings.Save(settingsPath); }
-            catch (Exception exception) { serverStatus = "Could not save settings: " + exception.Message; }
+            string error;
+            if (!settings.TrySaveLanguage(language, settingsPath, out error))
+            {
+                serverStatus = error;
+                return CommandFailure("language_save_failed", error);
+            }
+            if (server != null) server.SetLanguage(language);
+            return CommandSuccess("Server language saved.");
         }
 
         private void DrawServerWindow(int windowId)
@@ -607,11 +612,11 @@ namespace ArmorOverhaul.ArmorControl
                         }
                         ModuleLight light = module as ModuleLight;
                         if (light != null)
-                            toggles.Add(new PartToggleSnapshot("light", moduleIndex, "灯光", light.isOn, false));
+                            toggles.Add(new PartToggleSnapshot("light", moduleIndex, "Lights", light.isOn, false));
                         ModuleRCS rcs = module as ModuleRCS;
                         if (rcs != null)
                             toggles.Add(new PartToggleSnapshot("rcs", moduleIndex,
-                                string.IsNullOrEmpty(rcs.GetModuleDisplayName()) ? "RCS 推进器" : rcs.GetModuleDisplayName(),
+                                string.IsNullOrEmpty(rcs.GetModuleDisplayName()) ? "RCS Thruster" : rcs.GetModuleDisplayName(),
                                 rcs.rcsEnabled, false));
                         PartActionSnapshot action = CapturePartAction(part, module, moduleIndex);
                         actions.AddRange(PartFlightEvents.Capture(module, moduleIndex));
@@ -683,7 +688,7 @@ namespace ArmorOverhaul.ArmorControl
             }
             if (animationIndex < 0 || (!cargoNamed && !hasCargoModule)) return null;
             ModuleAnimateGeneric animation = part.Modules[animationIndex] as ModuleAnimateGeneric;
-            return animation == null ? null : new PartToggleSnapshot("cargo", animationIndex, "货舱门",
+            return animation == null ? null : new PartToggleSnapshot("cargo", animationIndex, "Cargo bay door",
                 animation.animSwitch, animation.aniState == ModuleAnimateGeneric.animationStates.MOVING);
         }
 
@@ -702,7 +707,7 @@ namespace ArmorOverhaul.ArmorControl
                     bool isDeployed = Math.Abs(position - deployed) <= Math.Abs(position - retracted);
                     string state = ReadMemberString(module, "stateString");
                     bool moving = ContainsIgnoreCase(state, "ing");
-                    return new PartToggleSnapshot("gear", index, "起落架", isDeployed, moving);
+                    return new PartToggleSnapshot("gear", index, "Landing gear", isDeployed, moving);
                 }
                 if (string.Equals(moduleName, "KSPWheelAdjustableGear", StringComparison.Ordinal))
                 {
@@ -710,7 +715,7 @@ namespace ArmorOverhaul.ArmorControl
                     string state = ReadMemberString(wheelBase, "wheelState") ?? ReadMemberString(wheelBase, "persistentState");
                     bool isDeployed = ContainsIgnoreCase(state, "deploy") && !ContainsIgnoreCase(state, "retract");
                     bool moving = ContainsIgnoreCase(state, "ing");
-                    return new PartToggleSnapshot("gear", index, "起落架", isDeployed, moving);
+                    return new PartToggleSnapshot("gear", index, "Landing gear", isDeployed, moving);
                 }
             }
             return null;
@@ -743,9 +748,9 @@ namespace ArmorOverhaul.ArmorControl
                 string currentTitle = ReadMemberString(module, "currentSubtypeTitle");
                 string description = ReadMemberString(module, "switcherDescription");
                 return new PartActionSnapshot("b9", moduleIndex,
-                    LocalizePartActionLabel(string.IsNullOrEmpty(description) ? "B9 零件切换" : description),
+                    LocalizePartActionLabel(string.IsNullOrEmpty(description) ? "B9 Part Switch" : description),
                     LocalizePartActionLabel(string.IsNullOrEmpty(currentTitle) ? current : currentTitle), false,
-                    "b9.switch", "切换配置", values.Exists(value => value != current), values.ToArray(), labels.ToArray(), current);
+                    "b9.switch", "Switch configuration", values.Exists(value => value != current), values.ToArray(), labels.ToArray(), current);
             }
 
             ModuleParachute parachute = module as ModuleParachute;
@@ -756,17 +761,17 @@ namespace ArmorOverhaul.ArmorControl
                 string commandLabel = null;
                 if (string.Equals(state, "STOWED", StringComparison.OrdinalIgnoreCase))
                 {
-                    command = "parachute.deploy"; commandLabel = "开伞 / 预备";
+                    command = "parachute.deploy"; commandLabel = "Deploy / arm parachute";
                 }
                 else if (string.Equals(state, "ACTIVE", StringComparison.OrdinalIgnoreCase))
                 {
-                    command = "parachute.disarm"; commandLabel = "取消预备";
+                    command = "parachute.disarm"; commandLabel = "Disarm parachute";
                 }
                 else if (ContainsIgnoreCase(state, "DEPLOYED"))
                 {
-                    command = "parachute.cut"; commandLabel = "切断伞绳";
+                    command = "parachute.cut"; commandLabel = "Cut parachute";
                 }
-                return new PartActionSnapshot("parachute", moduleIndex, "降落伞", ParachuteStateLabel(state),
+                return new PartActionSnapshot("parachute", moduleIndex, "Parachute", ParachuteStateLabel(state),
                     !string.Equals(state, "STOWED", StringComparison.OrdinalIgnoreCase), command, commandLabel,
                     !string.IsNullOrEmpty(command), null, null, null);
             }
@@ -776,9 +781,9 @@ namespace ArmorOverhaul.ArmorControl
             {
                 bool active = generator.generatorIsActive;
                 return new PartActionSnapshot("generator", moduleIndex,
-                    string.IsNullOrEmpty(generator.GetModuleDisplayName()) ? "发电机" : generator.GetModuleDisplayName(),
-                    string.IsNullOrEmpty(generator.status) ? (active ? "运行中" : "已停止") : generator.status,
-                    active, active ? "generator.stop" : "generator.start", active ? "停止设备" : "启动设备",
+                    string.IsNullOrEmpty(generator.GetModuleDisplayName()) ? "Generator" : generator.GetModuleDisplayName(),
+                    string.IsNullOrEmpty(generator.status) ? (active ? "Running" : "Stopped") : generator.status,
+                    active, active ? "generator.stop" : "generator.start", active ? "Stop device" : "Start device",
                     !generator.isAlwaysActive, null, null, null);
             }
 
@@ -788,10 +793,10 @@ namespace ArmorOverhaul.ArmorControl
                 bool reactor = ContainsIgnoreCase(moduleName, "reactor") || ContainsIgnoreCase(converter.ConverterName, "reactor");
                 bool active = converter.IsActivated;
                 string name = string.IsNullOrEmpty(converter.ConverterName)
-                    ? (reactor ? "核反应堆" : "资源转换器") : converter.ConverterName;
+                    ? (reactor ? "Nuclear reactor" : "Resource converter") : converter.ConverterName;
                 return new PartActionSnapshot(reactor ? "reactor" : "converter", moduleIndex, name,
-                    string.IsNullOrEmpty(converter.status) ? (active ? "运行中" : "已停止") : converter.status,
-                    active, active ? "converter.stop" : "converter.start", active ? "停止设备" : "启动设备",
+                    string.IsNullOrEmpty(converter.status) ? (active ? "Running" : "Stopped") : converter.status,
+                    active, active ? "converter.stop" : "converter.start", active ? "Stop device" : "Start device",
                     !converter.AlwaysActive, null, null, null);
             }
 
@@ -800,9 +805,9 @@ namespace ArmorOverhaul.ArmorControl
                 bool active = ReadMemberBool(module, "Enabled", ReadMemberBool(module, "IsActivated", false));
                 string status = ReadMemberString(module, "CoreStatus") ?? ReadMemberString(module, "status");
                 return new PartActionSnapshot("reactor", moduleIndex,
-                    string.IsNullOrEmpty(module.GetModuleDisplayName()) ? "核反应堆" : module.GetModuleDisplayName(),
-                    string.IsNullOrEmpty(status) ? (active ? "运行中" : "已停止") : status,
-                    active, active ? "reactor.disable" : "reactor.enable", active ? "关闭反应堆" : "启动反应堆",
+                    string.IsNullOrEmpty(module.GetModuleDisplayName()) ? "Nuclear reactor" : module.GetModuleDisplayName(),
+                    string.IsNullOrEmpty(status) ? (active ? "Running" : "Stopped") : status,
+                    active, active ? "reactor.disable" : "reactor.enable", active ? "Stop reactor" : "Start reactor",
                     true, null, null, null);
             }
 
@@ -811,9 +816,9 @@ namespace ArmorOverhaul.ArmorControl
                 bool active = part.vessel != null && part.vessel.referenceTransformId == part.flightID;
                 ModuleDockingNode port = module as ModuleDockingNode;
                 if (port != null) active = active && part.GetReferenceTransform() == port.controlTransform;
-                return new PartActionSnapshot("control", moduleIndex, "控制参考点",
-                    active ? "当前控制点" : (module is ModuleDockingNode ? "对接口方向" : "指挥模块方向"),
-                    active, "control.fromHere", active ? "正在从这里控制" : "从这里控制", !active,
+                return new PartActionSnapshot("control", moduleIndex, "Control reference",
+                    active ? "Current control point" : (module is ModuleDockingNode ? "Docking port orientation" : "Command module orientation"),
+                    active, "control.fromHere", active ? "Controlling from here" : "Control from here", !active,
                     null, null, null);
             }
 
@@ -829,11 +834,11 @@ namespace ArmorOverhaul.ArmorControl
 
         private static string ParachuteStateLabel(string state)
         {
-            if (string.Equals(state, "STOWED", StringComparison.OrdinalIgnoreCase)) return "已收纳";
-            if (string.Equals(state, "ACTIVE", StringComparison.OrdinalIgnoreCase)) return "已预备";
-            if (string.Equals(state, "SEMIDEPLOYED", StringComparison.OrdinalIgnoreCase)) return "半展开";
-            if (string.Equals(state, "DEPLOYED", StringComparison.OrdinalIgnoreCase)) return "已展开";
-            if (string.Equals(state, "CUT", StringComparison.OrdinalIgnoreCase)) return "伞绳已切断";
+            if (string.Equals(state, "STOWED", StringComparison.OrdinalIgnoreCase)) return "Stowed";
+            if (string.Equals(state, "ACTIVE", StringComparison.OrdinalIgnoreCase)) return "Armed";
+            if (string.Equals(state, "SEMIDEPLOYED", StringComparison.OrdinalIgnoreCase)) return "Semi-deployed";
+            if (string.Equals(state, "DEPLOYED", StringComparison.OrdinalIgnoreCase)) return "Extended";
+            if (string.Equals(state, "CUT", StringComparison.OrdinalIgnoreCase)) return "Parachute cut";
             return state;
         }
 
@@ -1386,6 +1391,8 @@ namespace ArmorOverhaul.ArmorControl
 
         private CommandExecution ExecuteCommand(IncomingMessage message)
         {
+            if (string.Equals(message.Name, "server.language.set", StringComparison.Ordinal))
+                return SelectLanguage(WireProtocol.ReadString(message.RawJson, "language"));
             if (string.Equals(message.Name, "game.quicksave.load", StringComparison.Ordinal))
                 return LoadQuickSave();
 

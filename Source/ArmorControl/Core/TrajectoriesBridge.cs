@@ -30,7 +30,7 @@ namespace ArmorOverhaul.ArmorControl.Core
                 snapshot.Version = Convert.ToString(GetApi("GetVersion"));
                 // Optional visualization must never disable the settings/impact telemetry.
                 try { snapshot.GroundPathsJson = CapturePaths(vessel); }
-                catch (Exception error) { snapshot.GroundPathsJson = "[]"; snapshot.PathStatus = "轨迹读取失败：" + error.GetBaseException().Message; }
+                catch (Exception error) { snapshot.GroundPathsJson = "[]"; snapshot.PathStatus = "Unable to read trajectory: " + error.GetBaseException().Message; }
                 snapshot.DisplayTrajectories = GetSetting<bool>("DisplayTrajectories");
                 snapshot.DisplayTrajectoriesInFlight = GetSetting<bool>("DisplayTrajectoriesInFlight");
                 snapshot.AlwaysUpdate = GetSetting<bool>("AlwaysUpdate");

@@ -25,6 +25,7 @@ namespace ArmorOverhaul.ArmorControl.Transport
         private readonly string webRoot;
         private readonly MainThreadBridge bridge;
         private readonly string accessToken;
+        private string language;
         private readonly ConcurrentDictionary<string, ClientSession> clients = new ConcurrentDictionary<string, ClientSession>();
         private CancellationTokenSource cancellation;
         private TcpListener listener;
@@ -41,16 +42,23 @@ namespace ArmorOverhaul.ArmorControl.Transport
         {
         }
 
-        internal ArmorControlServer(IPAddress bindAddress, int port, string webRoot, MainThreadBridge bridge, string accessToken = null)
+        internal ArmorControlServer(IPAddress bindAddress, int port, string webRoot, MainThreadBridge bridge, string accessToken = null, string language = "en-US")
         {
             this.port = port;
             this.webRoot = EnsureDirectorySeparator(Path.GetFullPath(webRoot));
             this.bridge = bridge;
             this.accessToken = accessToken ?? string.Empty;
+            SetLanguage(language);
             BindAddress = bindAddress ?? IPAddress.Any;
         }
 
         internal IPAddress BindAddress { get; private set; }
+
+        internal void SetLanguage(string value)
+        {
+            if (value != "en-US" && value != "zh-CN") throw new ArgumentException("Unsupported server language.", "value");
+            Volatile.Write(ref language, value);
+        }
 
         internal int ClientCount { get { return clients.Count; } }
         internal int VesselImageClientCount { get { return Volatile.Read(ref vesselImageClients); } }
@@ -285,12 +293,13 @@ namespace ArmorOverhaul.ArmorControl.Transport
             using (var linked = CancellationTokenSource.CreateLinkedTokenSource(serverToken))
             using (var client = new ClientSession(clientId, socket, stream, linked))
             {
+                // Queue hello before making the session visible to the broadcaster.
+                client.EnqueueText(WireProtocol.Hello(clientId));
                 if (!clients.TryAdd(clientId, client))
                 {
                     return;
                 }
 
-                client.EnqueueText(WireProtocol.Hello(clientId));
                 client.PublishTelemetry(WireProtocol.Telemetry(bridge.LatestSnapshot));
                 client.PublishRegular(WireProtocol.RegularTelemetry(bridge.LatestRegularSnapshot));
                 FlightRecorderSample latestRecorder = bridge.LatestRecorder;
@@ -460,6 +469,14 @@ namespace ArmorOverhaul.ArmorControl.Transport
             while (!token.IsCancellationRequested)
             {
                 TelemetrySnapshot snapshot = bridge.LatestSnapshot;
+                string currentLanguage = Volatile.Read(ref language);
+                foreach (ClientSession client in clients.Values)
+                {
+                    // Reliable, change-only delivery, including clients joining an idle scene.
+                    if (client.LastLanguage == currentLanguage) continue;
+                    client.EnqueueText(WireProtocol.ServerSettings(currentLanguage));
+                    client.LastLanguage = currentLanguage;
+                }
                 if (snapshot.Sequence != lastSequence)
                 {
                     if (!string.Equals(lastScene, snapshot.Scene, StringComparison.Ordinal)
@@ -765,6 +782,7 @@ namespace ArmorOverhaul.ArmorControl.Transport
             }
 
             internal string Id { get; private set; }
+            internal string LastLanguage; // Owned exclusively by BroadcastLoop.
             internal NetworkStream Stream { get; private set; }
 
             internal void PublishTelemetry(string json)

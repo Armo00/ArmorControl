@@ -14,7 +14,7 @@ English | [简体中文](README.zh-CN.md)
 
 Armor Control turns your phone, tablet, or another computer into a remote flight console for KSP. Monitor your vessel, operate its systems, plan maneuvers, and access supported autopilot functions through a web interface designed for touch and desktop use.
 
-The HTTP/WebSocket server runs inside KSP. No separate server application, kRPC installation, or special Armor Control part is required. English and Simplified Chinese are available; Chinese is selected by default.
+The HTTP/WebSocket server runs inside KSP. No separate server application, kRPC installation, or special Armor Control part is required. English and Simplified Chinese are available; the server selects one language for all connected devices, defaulting to English.
 
 ## Sounds familiar?
 
@@ -87,7 +87,7 @@ Enter the Flight scene to see the active vessel's data. The console follows the 
 
 ### Language
 
-Use the upper-right language selector to choose **简体中文** or **English**. The choice is saved per browser and does not change other devices. The in-game server panel has its own language setting.
+Choose **简体中文** or **English** in either the in-game ArmorControl toolbar panel or the web header. Both change the same global setting on the KSP computer: `language = zh-CN` or `language = en-US` in `settings.cfg`. After saving successfully, the server updates the native panel and all connected pages over WebSocket. New and reconnecting devices automatically follow it; old per-browser preferences are ignored. A failed save leaves the existing language unchanged and reports an error. For manual configuration changes, close KSP before editing and restart it to read the file.
 
 Contributors can edit the JSON catalogs in [`prototype/Localization`](prototype/Localization). See the [localization guide](prototype/Localization/README.md).
 

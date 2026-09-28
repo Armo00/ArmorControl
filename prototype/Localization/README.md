@@ -1,39 +1,116 @@
-# ArmorControl Localization
+# Armor Control localization
 
-默认语言为简体中文。网页右上角可切换简体中文 / English，无需重载页面。
-选择保存在当前浏览器的 localStorage（armorControlLanguage），不会改变其他设备。
-游戏内服务面板独立使用 settings.cfg 中的 language，缺省 zh-CN。
+English (`en-US`) is the default. Set `language = en-US` or `language = zh-CN` in the
+server's `settings.cfg`. The native window and every connected browser share this
+setting; old `armorControlLanguage` browser preferences are ignored.
 
-## 修改翻译
+Use either the in-game toolbar language buttons or the web header selector to save a
+global choice on the KSP computer and synchronize connected pages through the existing WebSocket.
+The browser sends `server.language.set` through the normal FIFO command queue; only a
+successful settings save triggers the global update. Failed writes leave the old setting intact.
+Joining and reconnecting clients
+receive a reliable `server.settings` snapshot, even when no flight telemetry is changing.
+The web selector changes the server setting, never an independent per-device preference.
+Manual file edits are read on the next KSP startup; close KSP before editing the file.
 
-- zh-CN.json：简体中文；en-US.json：英文。
-- languages.json：语言清单、显示名称及默认语言。
-- JSON 使用 UTF-8，messages 下的值必须是字符串。
-- 当前采用原始界面文案作为键。修改右侧译文，不要随意改键。
-- 完整句子优先匹配；旧的动态拼接文案按最长词条匹配，数值保持不变。
-- 新增动态文案优先使用完整句子和 {0}、{name} 占位符；两份词典保持键一致。
-- 翻译只作为文本显示，不支持 HTML。占位符、单位和专有名词应保留。
-- 不翻译控件 value、data-*、协议命令或枚举。代码判断使用 ArmorI18n.sourceText，
-  不得依据已经翻译的 textContent 判断控制模式。
-- 载具名、宇航员名、零件名称等用户/游戏数据不自动翻译。第三方模组提供的
-  零件菜单名称、异常详情等可能保留游戏或模组语言；需要针对其原文补充词条。
+## Contributing translations
 
-新增网页语言时复制一份词典，修改 locale，在 languages.json 注册 code/name。
-游戏内面板当前只提供 zh-CN/en-US；新增语言还需扩展 C# 中的语言校验和选择按钮。
-语言文件加载失败保留当前语言；缺少词条则显示原文。
+- `en-US.json`: English source text and fallback translations.
+- `zh-CN.json`: Simplified Chinese translations.
+- `languages.json`: registered web languages and their display names.
+- Use UTF-8 JSON. Every key and every English value must be English; values are strings.
+- Keys are complete English source messages, not Chinese text or protocol identifiers.
 
-运行离线检查：
+For example, the English catalog contains:
 
-    node BuildTools/ArmorControl.LocalizationTests.cjs
-    node BuildTools/ArmorControl.ReviewRegression.cjs
+```json
+{
+  "locale": "en-US",
+  "messages": {
+    "Activate cooling": "Activate cooling",
+    "Stage {0}": "Stage {0}"
+  }
+}
+```
 
-网页刷新后会重新读取词典；游戏内词典在切换语言或下次启动时读取。
+The corresponding Chinese entries are:
 
-## Contributing (English)
+```json
+{
+  "locale": "zh-CN",
+  "messages": {
+    "Activate cooling": "启动散热",
+    "Stage {0}": "分级 {0}"
+  }
+}
+```
 
-Edit the string values in en-US.json, keeping source keys identical to zh-CN.json.
-Preserve placeholders and units. Add complete sentences for new UI strings; legacy
-dynamic text also supports longest-first phrase matching. Translations are plain
-text, never HTML. Do not translate protocol values, commands, or user-generated names.
-Register new web locales in languages.json. Language preference is per browser.
-Run both offline tests above before submitting changes.
+Keep the same keys in both catalogs. Preserve every placeholder, including its name
+and number of occurrences. `{0}` and `{name}` are supported; translations can reorder
+them. Use complete sentences for changing values, not a collection of fragments.
+Translations are plain text, never HTML.
+
+The browser matches complete messages or anchored templates. It does **not** replace
+substrings inside unrelated labels or names. The other language's catalog values can
+also be recognized as source messages, for example a supported MechJeb status supplied
+in the game's Chinese locale. JSON keys remain English in both cases. The catalogs
+include ascent, landing, docking and rendezvous status messages from the supported
+local MechJeb 2.14.3 localization files; this does not add support for newer MechJeb versions.
+
+## Integrating UI text
+
+Write owned HTML, JavaScript and C# display text in English, then add matching entries
+to both catalogs. For explicit formatting, use `ArmorI18n.t('Stage {0}', {0: stage})`.
+The browser also observes new text and label attributes written by telemetry updates.
+
+Never translate input values, `data-*` values, protocol commands, enum names or IDs.
+Prefer stable identifiers for logic. Where legacy controls must inspect a label,
+use `ArmorI18n.sourceText(element)` rather than translated `textContent`.
+
+Protect user/game names with `data-l10n-skip` on the **name itself**, not on a whole
+card containing translatable controls. The frontend's `userText` helper protects a
+real name but leaves an empty-state fallback localizable. Vessel, Kerbal, part and
+resource names retain the game's language. Unknown third-party menu labels and
+exception details retain their original wording until corresponding entries are added.
+
+## Adding a language
+
+Copy the English catalog, change `locale`, translate the values and register `code`
+and `name` in `languages.json`. Do not rename the English keys. English is the built-in
+fallback and must remain registered. Invalid catalogs or placeholder mismatches are
+rejected; a failed catalog load keeps the current display language and shows an error.
+Reconnection or a new server language update retries the load.
+
+The native KSP window currently accepts `en-US` and `zh-CN` only. Adding another native
+language also requires extending its C# validation, transport validation and language selector,
+as well as the frontend's `followServerLanguage` locale allowlist.
+Its dependency-free JSON reader accepts the catalog schema shown above: only `locale`
+and `messages` at the root, with string keys and string values inside `messages`.
+Keep contributor notes in this README, not additional JSON fields. Duplicate keys,
+invalid escapes and incomplete catalogs are rejected with an English-source fallback.
+Do not add serializer assemblies or serializer attributes to the game DLL: other KSP
+mods scan type attributes, even for private types, before the localization loader runs.
+Web catalogs are re-read on server language updates or reloading the page. Native
+catalogs are cached for the current process; restart KSP to load edited native translations.
+
+## Validation
+
+From the development workspace root (the repository's parent KSP installation):
+
+```powershell
+node BuildTools/ArmorControl.LocalizationTests.cjs
+node BuildTools/ArmorControl.ReviewRegression.cjs
+dotnet run --project BuildTools/ArmorControl.TransportTests -c Release
+```
+
+These workspace test tools validate key parity, placeholders, default language,
+live updates, reversible switching, protected names, unchanged command values,
+failed/racing requests and native catalog loading. Test tools live in the development
+workspace and are not shipped in the release ZIP.
+
+## 中文说明
+
+语言由服务端 `settings.cfg` 统一决定，默认英文，浏览器的旧选择不再生效。所有词条键必须使用完整的英文原文，
+中文写在 `zh-CN.json` 的值中。动态文案使用完整句子和占位符，两份词典保持相同的键
+以及占位符。不要使用中文键、片段替换或翻译协议值；不要为了保护零件名而跳过整个
+操作卡片。修改翻译后请执行上述检查，并验证中英文切换及实时状态更新。
