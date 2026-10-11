@@ -14,3 +14,8 @@ Thumbs.db
 # Machine-specific server configuration may contain an access token.
 settings.cfg
 *.log
+
+# Local-only test and packaging tools: DO NOT track or publish these directories.
+/Tools/
+/Tests/
+/BuildTools/

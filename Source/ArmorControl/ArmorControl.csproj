@@ -10,40 +10,40 @@
     <DebugType>none</DebugType>
     <DebugSymbols>false</DebugSymbols>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
-    <KspRoot Condition="'$(KspRoot)' == ''">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\..\..'))</KspRoot>
+    <OutputPath>..\..\Plugins\</OutputPath>
   </PropertyGroup>
 
   <ItemGroup>
     <Reference Include="Assembly-CSharp">
-      <HintPath>$(KspRoot)/KSP_x64_Data/Managed/Assembly-CSharp.dll</HintPath>
+      <HintPath>..\..\..\..\KSP_x64_Data\Managed\Assembly-CSharp.dll</HintPath>
       <Private>False</Private>
     </Reference>
     <Reference Include="UnityEngine">
-      <HintPath>$(KspRoot)/KSP_x64_Data/Managed/UnityEngine.dll</HintPath>
+      <HintPath>..\..\..\..\KSP_x64_Data\Managed\UnityEngine.dll</HintPath>
       <Private>False</Private>
     </Reference>
     <Reference Include="UnityEngine.CoreModule">
-      <HintPath>$(KspRoot)/KSP_x64_Data/Managed/UnityEngine.CoreModule.dll</HintPath>
+      <HintPath>..\..\..\..\KSP_x64_Data\Managed\UnityEngine.CoreModule.dll</HintPath>
       <Private>False</Private>
     </Reference>
     <Reference Include="UnityEngine.AnimationModule">
-      <HintPath>$(KspRoot)/KSP_x64_Data/Managed/UnityEngine.AnimationModule.dll</HintPath>
+      <HintPath>..\..\..\..\KSP_x64_Data\Managed\UnityEngine.AnimationModule.dll</HintPath>
       <Private>False</Private>
     </Reference>
     <Reference Include="UnityEngine.IMGUIModule">
-      <HintPath>$(KspRoot)/KSP_x64_Data/Managed/UnityEngine.IMGUIModule.dll</HintPath>
+      <HintPath>..\..\..\..\KSP_x64_Data\Managed\UnityEngine.IMGUIModule.dll</HintPath>
       <Private>False</Private>
     </Reference>
     <Reference Include="UnityEngine.ImageConversionModule">
-      <HintPath>$(KspRoot)/KSP_x64_Data/Managed/UnityEngine.ImageConversionModule.dll</HintPath>
+      <HintPath>..\..\..\..\KSP_x64_Data\Managed\UnityEngine.ImageConversionModule.dll</HintPath>
       <Private>False</Private>
     </Reference>
     <Reference Include="VesselView">
-      <HintPath>$(KspRoot)/GameData/VesselView/Plugins/VesselView.dll</HintPath>
+      <HintPath>..\..\..\VesselView\Plugins\VesselView.dll</HintPath>
       <Private>False</Private>
     </Reference>
     <Reference Include="MechJeb2">
-      <HintPath>$(KspRoot)/GameData/MechJeb2/Plugins/MechJeb2.dll</HintPath>
+      <HintPath>..\..\..\MechJeb2\Plugins\MechJeb2.dll</HintPath>
       <Private>False</Private>
     </Reference>
   </ItemGroup>

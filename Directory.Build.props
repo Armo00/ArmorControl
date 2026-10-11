@@ -1,8 +1,6 @@
 <Project>
   <PropertyGroup>
     <!-- Keep intermediate DLLs outside GameData: KSP scans every DLL recursively. -->
-    <ArmorControlArtifactsRoot Condition="'$(ArmorControlArtifactsRoot)' == ''">$(MSBuildThisFileDirectory)..\..\BuildArtifacts\ArmorControl\</ArmorControlArtifactsRoot>
-    <BaseIntermediateOutputPath>$(ArmorControlArtifactsRoot)$(MSBuildProjectName)\obj\</BaseIntermediateOutputPath>
-    <OutputPath>$(ArmorControlArtifactsRoot)$(MSBuildProjectName)\bin\$(Configuration)\</OutputPath>
+    <BaseIntermediateOutputPath>$(MSBuildThisFileDirectory)..\..\BuildArtifacts\ArmorControl\obj\</BaseIntermediateOutputPath>
   </PropertyGroup>
 </Project>
