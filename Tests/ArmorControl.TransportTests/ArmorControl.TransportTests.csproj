@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <NoWarn>$(NoWarn);CS0649</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="LocalizationTests.cs" />
+    <Compile Include="SettingsTests.cs" />
+    <Compile Include="..\..\Source\ArmorControl\Core\ArmorControlSettings.cs" Link="Core\ArmorControlSettings.cs" />
+    <Compile Include="..\..\Source\ArmorControl\Core\ArmorControlLocalization.cs" Link="Core\ArmorControlLocalization.cs" />
+    <Compile Include="..\..\Source\ArmorControl\Core\TrajectoryMemberAccess.cs" Link="Core\TrajectoryMemberAccess.cs" />
+    <Compile Include="PartFlightEventsTests.cs" />
+    <Compile Include="..\..\Source\ArmorControl\Core\PartFlightEvents.cs" Link="Core\PartFlightEvents.cs" />
+    <Compile Include="..\..\Source\ArmorControl\Core\B9SwitchPolicy.cs" Link="Core\B9SwitchPolicy.cs" />
+    <Compile Include="..\..\Source\ArmorControl\Protocol\Messages.cs" Link="Protocol\Messages.cs" />
+    <Compile Include="..\..\Source\ArmorControl\Protocol\WireProtocol.cs" Link="Protocol\WireProtocol.cs" />
+    <Compile Include="..\..\Source\ArmorControl\Core\MainThreadBridge.cs" Link="Core\MainThreadBridge.cs" />
+    <Compile Include="..\..\Source\ArmorControl\Transport\ArmorControlServer.cs" Link="Transport\ArmorControlServer.cs" />
+  </ItemGroup>
+</Project>

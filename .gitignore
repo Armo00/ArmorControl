@@ -4,6 +4,7 @@ Plugins/
 **/obj/
 BuildArtifacts/
 ReviewBuild/
+Releases/
 *.user
 *.suo
 .vs/

@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../Source/ArmorControl/Core/AscentSettingBridge.cs" Link="AscentSettingBridge.cs" />
+  </ItemGroup>
+</Project>
