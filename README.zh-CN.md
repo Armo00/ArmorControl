@@ -2,7 +2,7 @@
 
 通过网页远程监控和控制载具，为触控和桌面操作设计的 KSP 飞行控制台。
 
-KSP 1.12.5 · 版本 0.1 · 早期测试 · CC BY-NC-SA
+KSP 1.12.5 · 版本 0.1.1 · 早期测试 · CC BY-NC-SA
 
 [English](README.md) | 简体中文
 
@@ -26,11 +26,11 @@ HTTP/WebSocket 服务直接运行在 KSP 内部，无需额外服务器、kRPC �
 
 ## 使用前请注意
 
-**早期测试：**0.1 是实验性版本，可能有大量 Bug、未完善功能和兼容性问题。请提前备份存档。
+**早期测试：**0.1.1 是实验性版本，可能有大量 Bug、未完善功能和兼容性问题。请提前备份存档。
 
 ### 依赖
 
-| 组件 | 0.1 版本中的要求 | 兼容性说明 |
+| 组件 | 要求 | 兼容性说明 |
 | --- | --- | --- |
 | KSP | 必需 | 针对 1.12.5 开发和测试。 |
 | MechJeb | 必需 | 使用 **2.14.3**，飞行数据、记录、节点和自动驾驶等功能依赖 MJ。 |
@@ -49,7 +49,7 @@ MechJeb 和 VesselView 是当前版本的直接程序集依赖，即使只使用
 
 ## 安装与连接
 
-目前通过 [GitHub](https://github.com/Armo00/ArmorControl) 分发，SpaceDock 和 CKAN 支持在计划中。
+安装包现已在 [GitHub](https://github.com/Armo00/ArmorControl/releases) 和 [SpaceDock](https://spacedock.info/mod/4542/Armor%20Control) 提供。CKAN 元数据目前仍未正确声明全部强依赖，使用前请自行确认安装 MechJeb 2.14.3 和 VesselView。
 
 1. 安装上表中的必需依赖。
 2. 从 [Releases](https://github.com/Armo00/ArmorControl/releases) 下载打包好的安装 ZIP，不要使用 **Code → Download ZIP** 或 GitHub 自动生成的源码压缩包。
@@ -219,13 +219,21 @@ MechJeb 自动发射、节点执行或自动着陆期间，网页手动油门锁
 
 服务设置位于 `GameData/ArmorControl/settings.cfg`，默认值见 [`settings.example.cfg`](settings.example.cfg)。手动修改前请关闭 KSP。默认端口为 `8765`，监听 `0.0.0.0`，自动启动且不设置访问令牌。配置中的遥测频率是采样目标，不是保证能达到的帧率。
 
-源码位于 [`Source/ArmorControl`](Source/ArmorControl)。源码仓库不是可直接安装的发行包，Git 忽略生成的 DLL 和本机配置。当前项目需要放在 KSP 安装目录的 `GameData/ArmorControl` 下，并具备所需的本地依赖程序集。准备好合适的 .NET SDK 与 .NET Framework 4.6.1 目标支持后，可在本目录执行：
+源码位于 [`Source/ArmorControl`](Source/ArmorControl)。源码仓库不是可直接安装的发行包，Git 忽略生成的 DLL 和本机配置。准备好 KSP 1.12.5 与所需本地依赖、合适的 .NET SDK 和 .NET Framework 4.6.1 目标支持后，可在仓库根目录执行：
 
 ```powershell
-dotnet build Source/ArmorControl/ArmorControl.csproj -c Release
+./Tools/ArmorControl.VerifyRelease.ps1 -KspRoot 'C:\Games\KSP'
 ```
 
-DLL 输出到 `Plugins`，中间文件保存在 `GameData` 之外，以免被 KSP 重复加载。维护者的验证与打包脚本目前位于游戏根目录的外部 `BuildTools` 中，尚未纳入本仓库。
+验证与打包工具现已纳入 [`Tools`](Tools)，测试源码位于 [`Tests`](Tests)。源码仓库可检出到 KSP 之外，通过 `-KspRoot` 指定安装路径；只有仓库位于 `GameData/ArmorControl` 时才会自动推断。建议使用 Windows、PowerShell 7、.NET 8 SDK（支持 .NET Framework 4.6.1 目标）和 Node.js 20 或更高版本。
+
+上述入口编译 DLL 并运行完整离线回归。所有中间产物、插件和测试 DLL 默认放在本机临时目录的独立构建目录，可通过 `-ArtifactsDirectory` 指定，禁止放入 GameData。脚本不覆盖游戏安装中的 DLL，也不会启动 KSP。
+
+```powershell
+./Tools/ArmorControl.PackageRelease.ps1 -KspRoot 'C:\Games\KSP' -Version 0.1.1 -ReleaseDirectory 'C:\Releases\ArmorControl'
+```
+
+打包入口执行完整验证，输出 ZIP、SHA-256 和更新日志，并检查包内文件、默认配置及网页词典；同名发布文件已存在时拒绝覆盖。离线测试包含 MJ 桩，不代表已完成游戏内验证。预编译 DLL 验证和安装说明见 [发布约定](RELEASE.md)。
 
 [协议说明](PROTOCOL.md) · [本地化维护说明](prototype/Localization/README.md) · [发布约定](RELEASE.md)
 

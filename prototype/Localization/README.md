@@ -95,18 +95,19 @@ catalogs are cached for the current process; restart KSP to load edited native t
 
 ## Validation
 
-From the development workspace root (the repository's parent KSP installation):
+From the ArmorControl repository root:
 
 ```powershell
-node BuildTools/ArmorControl.LocalizationTests.cjs
-node BuildTools/ArmorControl.ReviewRegression.cjs
-dotnet run --project BuildTools/ArmorControl.TransportTests -c Release
+node Tests/ArmorControl.LocalizationTests.cjs
+node Tests/ArmorControl.ReviewRegression.cjs
+./Tools/ArmorControl.VerifyRelease.ps1 -KspRoot 'C:\Games\KSP'
 ```
 
-These workspace test tools validate key parity, placeholders, default language,
+These repository test tools validate key parity, placeholders, default language,
 live updates, reversible switching, protected names, unchanged command values,
-failed/racing requests and native catalog loading. Test tools live in the development
-workspace and are not shipped in the release ZIP.
+failed/racing requests and native catalog loading. The full verification script
+also checks the production DLL metadata. Test sources are tracked in Git but are
+not shipped in the runtime release ZIP. Tests never launch or control KSP.
 
 ## 中文说明
 

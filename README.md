@@ -2,7 +2,7 @@
 
 A touch-friendly remote flight console for Kerbal Space Program.
 
-KSP 1.12.5 · Version 0.1 · Early beta · CC BY-NC-SA
+KSP 1.12.5 · Version 0.1.1 · Early beta · CC BY-NC-SA
 
 English | [简体中文](README.zh-CN.md)
 
@@ -26,11 +26,11 @@ I also wanted to move frequently used controls onto another device, leaving the 
 
 ## Attention needed
 
-**Early beta:** Version 0.1 is experimental. Expect bugs, incomplete behavior, and compatibility issues. Back up your saves before testing.
+**Early beta:** Version 0.1.1 is experimental. Expect bugs, incomplete behavior, and compatibility issues. Back up your saves before testing.
 
 ### Dependencies
 
-| Component | Requirement in 0.1 | Compatibility notes |
+| Component | Requirement | Compatibility notes |
 | --- | --- | --- |
 | KSP | Required | Developed and tested with 1.12.5. |
 | MechJeb | Required | Use **2.14.3**. Flight data, recording, planning, and automation integrate with MJ. |
@@ -49,7 +49,7 @@ I have encountered too many problems with MechJeb 2.15.x in my setup, so support
 
 ## Installation and connection
 
-Distribution is currently through [GitHub](https://github.com/Armo00/ArmorControl). SpaceDock and CKAN support are planned.
+Packaged releases are available on [GitHub](https://github.com/Armo00/ArmorControl/releases) and [SpaceDock](https://spacedock.info/mod/4542/Armor%20Control). CKAN metadata currently does not declare all required dependencies correctly; check and install MechJeb 2.14.3 and VesselView yourself before use.
 
 1. Install the required dependencies above.
 2. Download the packaged release ZIP from [Releases](https://github.com/Armo00/ArmorControl/releases), not **Code → Download ZIP** or GitHub's automatically generated source archives.
@@ -219,13 +219,21 @@ Please [report bugs on GitHub](https://github.com/Armo00/ArmorControl/issues) wi
 
 Server settings are in `GameData/ArmorControl/settings.cfg`; see [`settings.example.cfg`](settings.example.cfg) for defaults. Stop KSP before editing manually. Defaults include port `8765`, binding to `0.0.0.0`, automatic startup, and no access token. Configured telemetry rates are sampling targets, not guaranteed frame rates.
 
-Source is under [`Source/ArmorControl`](Source/ArmorControl). A source checkout is not an installable release: generated DLLs and local settings are ignored by Git. The current project expects to be at `GameData/ArmorControl` inside a KSP installation with the required local assemblies present. With a suitable .NET SDK and .NET Framework 4.6.1 targeting support, build from this directory:
+Source is under [`Source/ArmorControl`](Source/ArmorControl), reproducible checks under [`Tests`](Tests), and build/release tools under [`Tools`](Tools). A source checkout is not an installable release: generated DLLs and local settings are ignored by Git. On Windows, use PowerShell 7, the .NET 8 SDK (including .NET Framework 4.6.1 targeting support), Node.js 20 or newer, and a local KSP 1.12.5 installation with MechJeb 2.14.3 and VesselView installed. The repository may be cloned outside KSP. From the repository root:
 
 ```powershell
-dotnet build Source/ArmorControl/ArmorControl.csproj -c Release
+./Tools/ArmorControl.VerifyRelease.ps1 -KspRoot 'C:\Games\KSP'
 ```
 
-The DLL is written to `Plugins`; intermediate files stay outside `GameData` to avoid duplicate loading. The maintainer's verification and packaging scripts currently live in the KSP installation's external `BuildTools` directory and are not included in this repository.
+This builds the DLL and runs the native transport/protocol, localization, frontend, orbit/recorder, and ascent-setting regressions. The KSP path is inferred only when the checkout is at `GameData/ArmorControl`. Build outputs and test DLLs stay outside `GameData`, in a checkout-specific temporary directory by default; use `-ArtifactsDirectory` for an explicit location. Nothing is deployed into the game, and KSP is never launched.
+
+Create an installable ZIP, SHA-256 file, and changelog export with:
+
+```powershell
+./Tools/ArmorControl.PackageRelease.ps1 -KspRoot 'C:\Games\KSP' -Version 0.1.1 -ReleaseDirectory 'C:\Releases\ArmorControl'
+```
+
+Packaging runs the full verification gate, validates the archive, includes default settings instead of local settings, and refuses to overwrite an existing release. See [release conventions](RELEASE.md) for prebuilt-DLL verification and installation details. Offline tests include MechJeb stubs; they do not replace in-game validation.
 
 [Protocol notes](PROTOCOL.md) · [Localization guide](prototype/Localization/README.md) · [Release conventions](RELEASE.md)
 
