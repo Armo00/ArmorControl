@@ -2,7 +2,7 @@
 
 A touch-friendly remote flight console for Kerbal Space Program.
 
-KSP 1.12.5 · Version 0.1 · Early beta · CC BY-NC-SA
+KSP 1.12.5 · Development version 0.1.2 (unreleased) · Early beta · CC BY-NC-SA
 
 English | [简体中文](README.zh-CN.md)
 
@@ -179,6 +179,21 @@ Create and manage nodes through supported MechJeb operations, each with its rele
 Includes orbit previews, a node queue, execution and abort controls, and MechJeb automatic time-warp settings.
 
 ![Maneuver Planning — nodes and Porkchop selection](Screenshot/Node.png)
+
+</details>
+
+<details>
+<summary>Map — planetary basemap and ground track (unreleased)</summary>
+
+A north-up global map of the active vessel's current body, using available in-game color textures rather than an external Earth-only basemap. Supports touch panning and pinch zoom, a distance scale, orbit readouts, and independent time windows on each device.
+
+Choose a start before or after the current time with day/hour/minute selectors, then a 1/3/5/10-hour duration. The automatic window normally shows the next five hours; a predicted atmospheric entry or airless impact uses the corresponding entry/impact window. Tracks are solid below 0.1 body radii, dashed up to six body diameters in altitude, and hidden above that limit.
+
+Displays registered KSP waypoints on the current body, including stock and compatible mod-created waypoints, with the active navigation point highlighted. Use Show waypoints above the map to hide or show all waypoint pins and names; your display choice is remembered in that browser without affecting other devices or game navigation. You can also center a point from the list. The third-party Waypoint Manager mod is not required.
+
+The selected vessel target is shown on the same body's map: landed or splashed targets have a position marker, while flying targets have a separate purple ground track over the selected future interval. Docking-port targets resolve to their vessel. Target paths use the same altitude rules and stop at atmosphere entry, impact, the next maneuver, or a SOI transition. Show target vessel and Center target affect only the web map, not the game's target. Targets on other bodies are identified but not projected onto the wrong map. An actual orbital target at Saturn and a landed lunar base have been checked in game and in the 4K web map; additional target-transition cases still need live validation.
+
+Vacuum sections use the actual orbit and body rotation. Atmospheric sections require an available Trajectories prediction; missing atmospheric data or historical samples are not replaced with fabricated paths. Paths stop at prediction limits or SOI transitions. Basemap extraction can fall back to a coordinate grid when no supported global color texture is available. Earth basemap alignment, live waypoint display, and optimized Earth/Moon map capture have been checked in game; broader body compatibility and detailed impact matching still require validation.
 
 </details>
 
