@@ -7,6 +7,7 @@
   <title>ArmorControl · Flight Console</title>
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="trajectory-layout.css">
+  <link rel="stylesheet" href="map.css">
   <link rel="stylesheet" href="localization.css">
 </head>
 <body>
@@ -52,6 +53,10 @@
         <button class="nav-item" data-view="planner" aria-label="Maneuver planning">
           <svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="12" rx="9" ry="4" transform="rotate(-28 12 12)"/><circle cx="7" cy="15" r="2"/><path d="M7 10v5h5"/></svg>
           <span>Nodes</span>
+        </button>
+        <button class="nav-item" data-view="map" aria-label="Planet map and ground track">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5l6-2 6 2 6-2v16l-6 2-6-2-6 2V5ZM9 3v16M15 5v16"/></svg>
+          <span>Map</span>
         </button>
         <button class="nav-item" data-view="autopilot" aria-label="Autopilot">
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 5v14M5 12h14M8 8l8 8M16 8l-8 8"/></svg>
@@ -398,6 +403,36 @@
             </dl>
             <div class="target-actions"><button class="soft-button" id="clearTarget">Clear current target</button><button class="primary-action" id="applyTarget" disabled>Set as KSP target</button></div>
           </section>
+        </div>
+      </section>
+
+      <section class="view map-view" id="view-map" aria-labelledby="map-title">
+        <div class="view-heading"><div><span class="eyebrow">GROUND TRACK</span><h1 id="map-title">Planet map</h1></div><span class="mode-chip" id="mapLinkStatus">Waiting for game</span></div>
+        <div class="planet-map-layout">
+          <section class="planet-map-panel" aria-label="Planet surface map">
+            <header class="planet-map-header"><div><h2 id="mapBodyName" data-l10n-skip>—</h2><small>North up · Body-fixed coordinates</small></div><span id="mapTextureSource">Waiting for planet texture</span></header>
+            <div class="planet-map-layers"><label><input id="mapOrbitLayer" type="checkbox" checked>Ground track</label><label><input id="mapEventLayer" type="checkbox" checked>Key positions</label><label class="planet-map-waypoint-toggle"><input id="mapWaypointLayer" type="checkbox" role="switch" aria-controls="planetMapCanvas" checked>Show waypoints</label><label class="planet-map-target-toggle"><input id="mapTargetLayer" type="checkbox" role="switch" aria-controls="planetMapCanvas" checked>Show target vessel</label><label><input id="mapGridLayer" type="checkbox" checked>Latitude / longitude grid</label></div>
+            <div class="planet-map-stage"><canvas id="planetMapCanvas" role="img" aria-label="Planet map and predicted ground track"></canvas><span class="planet-map-north">N ↑</span><div class="planet-map-zoom"><button type="button" id="mapZoomIn" aria-label="Zoom in">+</button><button type="button" id="mapZoomOut" aria-label="Zoom out">−</button><button type="button" id="mapWorld">Global</button></div></div>
+            <div class="planet-map-actions"><button type="button" id="mapFitTrack">Selected track</button><small>Drag to pan · Pinch to zoom</small></div>
+            <div class="planet-map-coordinates"><span>Current position <b id="mapCurrentCoordinates" data-l10n-skip>—</b></span><span>Current altitude <b id="mapCurrentAltitude" data-l10n-skip>—</b></span></div>
+            <div class="planet-map-source-key"><span><i></i>Vacuum orbit</span><span><i class="is-aero"></i>Atmospheric prediction</span><span><i class="is-history"></i>Recorded history</span><span><i class="is-target"></i>Target vessel</span></div>
+            <p class="planet-map-message" id="mapPredictionStatus" role="status">Waiting for map telemetry</p>
+          </section>
+          <aside class="planet-map-details">
+            <section class="planet-map-card"><h2>Current orbit</h2><dl class="planet-map-orbit"><div><dt>Apoapsis AP</dt><dd id="mapApoapsis">—</dd></div><div><dt>Periapsis PE</dt><dd id="mapPeriapsis">—</dd></div><div><dt>Inclination</dt><dd id="mapInclination">—</dd></div><div><dt>Eccentricity</dt><dd id="mapEccentricity">—</dd></div><div><dt>Orbital period</dt><dd id="mapPeriod">—</dd></div></dl></section>
+            <section class="planet-map-card planet-map-target"><h2>Target vessel</h2><b id="mapTargetName" data-l10n-skip>—</b><p id="mapTargetStatus" class="planet-map-default" role="status">No vessel target selected.</p><dl class="planet-map-events"><div><dt>Target position</dt><dd id="mapTargetCoordinates" data-l10n-skip>—</dd></div><div><dt>Target altitude</dt><dd id="mapTargetAltitude" data-l10n-skip>—</dd></div></dl><button type="button" id="mapCenterTarget" disabled>Center target</button></section>
+            <section class="planet-map-card"><h2>Prediction window</h2>
+              <label class="planet-map-auto"><input id="mapAutomaticWindow" type="checkbox" checked>Automatic default window</label>
+              <label class="planet-map-select-label" for="mapStartDirection">Start relative to now</label><select id="mapStartDirection"><option value="after">After now</option><option value="before">Before now</option></select>
+              <div class="planet-map-start"><label for="mapStartDays">d<select id="mapStartDays" aria-label="Start offset days"></select></label><label for="mapStartHours">h<select id="mapStartHours" aria-label="Start offset hours"></select></label><label for="mapStartMinutes">min<select id="mapStartMinutes" aria-label="Start offset minutes"></select></label></div>
+              <label class="planet-map-select-label" for="mapWindowHours">Duration from start</label><select id="mapWindowHours"><option value="1">1 hour</option><option value="3">3 hours</option><option value="5" selected>5 hours</option><option value="10">10 hours</option></select>
+              <p class="planet-map-default" id="mapDefaultRule">Now · next 5 hours</p>
+              <div class="planet-map-key"><i></i><span>Height ≤ 0.1R: solid</span></div><div class="planet-map-key is-dashed"><i></i><span>0.1R &lt; height ≤ 6D: dashed</span></div>
+              <p class="planet-map-default" id="mapHeightLimit">Height above 6D is hidden. R is radius; D is diameter.</p>
+              <dl class="planet-map-events"><div><dt>Selected interval</dt><dd id="mapWindowReadout">—</dd></div><div><dt>Atmosphere entry</dt><dd id="mapEntryTime">—</dd></div><div><dt>Predicted impact</dt><dd id="mapImpactTime">—</dd></div></dl>
+            </section>
+            <section class="planet-map-card planet-map-waypoints"><h2>Waypoints on this body</h2><p id="mapWaypointCount" class="planet-map-default">Waiting for waypoint data</p><p id="mapWaypointVisibility" class="planet-map-default" role="status" hidden>Waypoints are hidden on the map.</p><div id="mapWaypointList" class="planet-map-waypoint-list"></div><small>Select a waypoint to center the map. Game navigation is unchanged.</small></section>
+          </aside>
         </div>
       </section>
 
@@ -905,6 +940,7 @@
   </div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <script src="i18n.js"></script>
+  <script src="map.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

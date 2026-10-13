@@ -23,12 +23,38 @@
 {
   "type": "hello",
   "protocol": 1,
+  "mapVersion": 1,
   "clientId": "8e5f...",
   "capabilities": ["telemetry.fast", "telemetry.regular", "event.context", "event.vessel", "command.fifo", "multiClient"]
 }
 ```
 
 `clientId` 只用于命令追踪和诊断，不表示角色或控制权。
+
+`mapVersion: 1` 表示支持下述地图订阅；没有该字段的旧服务端不支持地图页。它是可选能力，不改变主协议版本。
+
+### `telemetry.map`
+
+仅向订阅地图的客户端推送，目标频率 1 Hz，使用独立 latest-only 槽。相同时间窗口只计算一次，不同设备可独立选范围。无活动飞行载具时 `available=false`；采集失败返回 `status=capture_failed`，不发送虚构轨迹。
+
+- 上下文：`sequence`、`vesselId`、当前 `ut`、`requestKey`。
+- 天体：内部名称 `body`、显示名称 `bodyName`、米制 `radius`、`atmosphere`、`atmosphereDepth`。
+- 当前状态：`latitude`、`longitude`（角度）、米制 `altitude`、`apoapsis`、`periapsis`，角度制 `inclination`，`eccentricity` 与秒制 `period`。逃逸轨道的 AP/周期为 `null`。
+- 时间窗口：绝对 UT 秒制 `start`/`end`、`automatic`、`defaultReason`（`current`、`atmosphere`、`impact`）、`historyMissing`。
+- 预测：`entryUt`、`impactUt`、`impactSource`（`Trajectories`、`terrain`、`sphere` 或 `null`）、`entryTimeUnknown`、`predictionStatus`、`predictionEnd`、`endReason`。不可得的时间为 `null`。
+- 底图：`mapKey`、`mapReady`、`mapSource`、`mapStatus`。图片在游戏侧生成和缓存，网络线程不访问 Unity 纹理。
+- 航点：`waypointsAvailable` 与 `waypoints` 数组，只包含当前天体上 KSP WaypointManager 已注册且未隐藏的点，不限于当前导航目标。每项含稳定 `id`、原始 `name`、角度制 `latitude`/`longitude`、米制 `altitude`，以及 `navigating`、`onSurface`、`custom`。原版和通过原生列表注册的第三方航点均支持；不依赖第三方 Waypoint Manager DLL。读取失败时数组为空且 `waypointsAvailable=false`，不影响轨迹通道。
+- 目标载具：新增可选 `target` 对象，跟随 KSP 当前目标；对接口映射到所属载具，星球目标和自身目标视为无目标载具。包含 `available`、无连字符 `id`、原始 `name`、`body`/`bodyName`、`onSurface`、角度制 `latitude`/`longitude`、米制 `altitude`、`status`、`endReason`、`historyMissing` 和同格式的 `segments`。无目标为 `status=none`；其他天体为 `status=other_body`、`available=false`，坐标为 `null` 且无轨迹；失败为 `status=unavailable`，不阻断本载具地图。旧服务端缺失整个字段时，前端提示升级而不是声称未选目标。
+- 诊断：`mapReadbackMs` 包含本张底图首次纹理读取、UV 校准和 GPU 回读的主线程耗时；`mapEncodeMs` 是后台 PNG 编码耗时。它们不是每秒重复绘图的耗时。
+- `segments`：每项含 `source`（`history`、`orbit` 或 `atmosphere`）、`dashed` 与 `points`。每个点为 `[UT, latitude, longitude, altitude]`；坐标是上方为北的地固经纬度，高度以米计、相对平均半径。
+
+服务端按每个点的高度分段：`h ≤ 0.1R` 实线，`0.1R < h ≤ 12R` 虚线，`h > 12R` 隐藏。`12R = 6D`，不是距天体中心的距离。隐藏区域两端不得连接，客户端还必须在 ±180° 经线断开路径。
+
+自动范围：普通飞行从当前 UT 起 5 小时；有可得的大气进入时刻时，从进入前 600 秒起 3 小时；无大气且 PE < 0、撞击时刻可得时，从撞击前 10800 秒起 3 小时。若加载时已在大气中且没有进入记录，不能把加载时刻伪装成进入时刻；返回 `entryTimeUnknown=true`，保留从当前起的默认范围。过去轨迹仅来自本次活动载具上下文的实际采样；缺失历史不由当前轨道倒推补画。
+
+`status` 包含 `ready`、`missing_aero`、`missing_impact`、`above_height_limit`、`landed`。`endReason` 可为 `soi`、`impact`、`prediction_end`、`maneuver` 或 `atmosphere`。若大气预测不可用，只画进入大气前的真空轨迹；载具已在大气内时不以真空椭圆替代气动预测。无大气且 PE < 0 但撞击时刻不可得时，保留已记录历史，不延长可能穿地的真空轨道。Trajectories 不足以覆盖整个范围时不自行延长其结果。
+
+`target.status` 为 `ground`（着陆/溅落，位置标记，无轨迹）、`orbit`（地固轨道轨迹）、`atmosphere`（当前位于大气内，仅位置）、`missing_impact`（撞击时刻不可得，仅位置），以及上述 `none`/`other_body`/`unavailable`。目标使用当前窗口的未来部分，从 `max(start, ut)` 起算，不倒推目标历史；选择过去窗口时 `historyMissing=true`。目标轨迹遵循相同 0.1R/12R 高度裁切，在下一个机动、SOI 切换、大气入口或无大气地形撞击处停止。不得把活动载具的 Trajectories 预测套给目标。前端紫色目标图层可独立显隐，定位目标仅改变网页视角，不发送目标选择或载具控制命令。
 
 ### `telemetry.fast`
 
@@ -108,6 +134,16 @@
 
 ## 客户端消息
 
+### `map.subscribe`
+
+```json
+{"type":"map.subscribe","active":true,"automatic":false,"startOffset":-600,"hours":3}
+```
+
+`startOffset` 是相对当前 UT 的秒数，正值表示之后，负值表示之前，服务端取整到秒，绝对值不超过 366 天。`hours` 只接受整数 `1`、`3`、`5`、`10`。`automatic=true` 使用上述默认规则；`active=false` 退订。这不是飞行控制命令，不进入控制 FIFO、不修改游戏设置，也不向其他设备同步选中的时间范围。
+
+自动订阅的 `requestKey` 为 `auto`，手动为 `<整秒 startOffset>:<hours>`，用于拒绝刚切换范围后的旧帧。最多同时允许 16 个不同窗口；超额返回 `map_busy`，非法参数返回 `invalid_map_window`，保留先前有效订阅。关闭连接自动退订；客户端在离开地图页或页面隐藏时也应退订。
+
 ### `ping`
 
 ```json
@@ -179,11 +215,14 @@
 
 `GET /health` 的 `metrics` 返回累计的快速/常规采样数量、采样平均与峰值毫秒，以及快速 JSON 序列化平均与峰值毫秒。它用于 30/60 Hz 帧预算验收，不参与飞行控制。
 
+新增可选 `mapMetrics`：`captureSamples`、`captureAverageMs`、`captureMaximumMs` 为有地图订阅时的主线程采集/预测/序列化统计，首次底图处理包含在内；`cachedReadbackMaximumMs`、`cachedEncodeMaximumMs` 为仍在缓存中的底图处理峰值；`activeWindows` 为当前去重后的订阅窗口数。未打开地图时不生成底图或预测，诊断读取不会触发游戏计算。
+
 ## 按需结构与历史 API
 
 - `GET /api/v1/crew`：只返回当前活动载具成员、职业、等级、所在零件/舱段、载具容量，以及逐人的 EVA 可用状态/原因。
 - `GET /api/v1/vessel`：返回当前载具完整零件树、温度、资源和模块名称，并为每个零件返回带稳定模块索引的 `engines` 与 `toggles`。引擎包含点火、重启/关机能力、推力限制和对应 Gimbal；`toggles.kind` 独立区分 `rcs`、`light`、`gear`、`cargo`。协议不设零件数量上限。
 - `GET /api/v1/vessel-image.jpg`：返回最近一次载具投影，主要用于诊断；正式网页使用 `/ws/vessel`，不轮询此端点。
+- `GET /api/v1/planet-map?key=<mapKey>`：获取已缓存的 2048×1024、经纬度对齐的 PNG 颜色底图。需要时携带与其他 API 相同的访问令牌。`key` 只查内存缓存，不解释为文件路径；未就绪/已淘汰返回 404。每个底图加载一次，轨迹变化不重新请求图片。
 - `GET /api/v1/recorder`：返回当前 3000 点记录窗口，只在首次打开或上下文重置后请求。
 - `GET /api/v1/recorder.csv`：以 MechJeb 的 18 列顺序导出同一记录窗口。
 

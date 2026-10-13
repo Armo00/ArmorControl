@@ -169,6 +169,8 @@
           return;
         }
         state.clientId = message.clientId;
+        window.ArmorMap?.connect({ supported: message.mapVersion === 1, api: apiUrl,
+          send: payload => { if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(payload)); } });
         state.recorderConnection = (state.recorderConnection || 0) + 1;
         state.recorderRevision = undefined;
         state.recorderSamples = [];
@@ -190,10 +192,12 @@
       if (message.type === 'telemetry.regular') acceptRegularTelemetry(message);
       if (message.type === 'telemetry.flightPanel') renderFlightPanel(message);
       if (message.type === 'telemetry.automation') renderAutomation(message);
+      if (message.type === 'telemetry.map') window.ArmorMap?.accept(message);
       if (message.type === 'vessel.structure') acceptVesselStructure(message);
       if (message.type === 'recorder.sample') acceptRecorderSample(message);
       if (message.type === 'recorder.reset') acceptRecorderRevision(message.revision);
       if (message.type === 'event.context') {
+        window.ArmorMap?.context(message.vesselId);
         state.structureRevision = 0;
         fetchStructuralData();
         fetchRecorderHistory();
@@ -228,6 +232,7 @@
       if (message.type === 'error') showToast(`Server error:${message.message || message.code || 'Unknown error'}`);
     });
     socket.addEventListener('close', () => {
+      window.ArmorMap?.disconnect();
       state.languagePendingCommandId = null;
       updateLanguageControl();
       clearInterval(state.heartbeatTimer);
@@ -261,6 +266,7 @@
   }
 
   function acceptRegularTelemetry(message) {
+    window.ArmorMap?.regular(message);
     state.lastRegularTelemetryAt = performance.now();
     state.regularSample = message;
     renderAscentOrbitReadouts(message);
@@ -1971,6 +1977,7 @@
       const name = button.dataset.view;
       $$('.nav-item').forEach(item => item.classList.toggle('is-active', item === button));
       $$('.view').forEach(view => view.classList.toggle('is-active', view.id === `view-${name}`));
+      window.ArmorMap?.active(name === 'map');
       if (name === 'vessel') connectVesselImage();
       else disconnectVesselImage();
       window.scrollTo({ top: 0, behavior: 'smooth' });

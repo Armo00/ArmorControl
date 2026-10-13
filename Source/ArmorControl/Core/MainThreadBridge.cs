@@ -28,6 +28,7 @@ namespace ArmorOverhaul.ArmorControl.Core
         private AutomationSnapshot latestAutomation;
         private PorkchopResultSnapshot latestPorkchop = PorkchopResultSnapshot.Empty;
         private long commandSequence;
+        internal readonly MapTelemetryStore Map = new MapTelemetryStore();
 
         internal Func<IncomingMessage, CommandExecution> CommandHandler { get; set; }
 

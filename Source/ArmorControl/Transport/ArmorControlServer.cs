@@ -197,7 +197,7 @@ namespace ArmorOverhaul.ArmorControl.Transport
                     ClientCount,
                     bridge.LatestMetrics,
                     SerializationAverageMilliseconds(),
-                    Milliseconds(Volatile.Read(ref fastSerializationMaximumTicks))));
+                    Milliseconds(Volatile.Read(ref fastSerializationMaximumTicks)), bridge.Map.MetricsJson()));
                 await WriteHttp(stream, 200, "OK", "application/json; charset=utf-8", health, token).ConfigureAwait(false);
                 return;
             }
@@ -206,6 +206,19 @@ namespace ArmorOverhaul.ArmorControl.Transport
             {
                 byte[] crew = Encoding.UTF8.GetBytes(WireProtocol.Crew(bridge.LatestStructure));
                 await WriteHttp(stream, 200, "OK", "application/json; charset=utf-8", crew, token).ConfigureAwait(false);
+                return;
+            }
+
+            if (request.Path == "/api/v1/planet-map")
+            {
+                string mapKey = QueryValue(request.Query, "key");
+                PlanetMapAsset map = string.IsNullOrEmpty(mapKey) ? null : bridge.Map.GetAsset(mapKey);
+                if (map == null || !map.Ready)
+                {
+                    await WriteHttp(stream, 404, "Not Found", "text/plain; charset=utf-8", Encoding.UTF8.GetBytes("Planet map not ready"), token).ConfigureAwait(false);
+                    return;
+                }
+                await WriteHttp(stream, 200, "OK", "image/png", map.Png, token).ConfigureAwait(false);
                 return;
             }
 
@@ -329,6 +342,7 @@ namespace ArmorOverhaul.ArmorControl.Transport
                 {
                     ClientSession removed;
                     clients.TryRemove(clientId, out removed);
+                    bridge.Map.Subscribe(clientId, null);
                     linked.Cancel();
                     try { await sender.ConfigureAwait(false); } catch { }
                 }
@@ -444,6 +458,21 @@ namespace ArmorOverhaul.ArmorControl.Transport
                     client.EnqueueText(WireProtocol.Pong(message.Sequence));
                     continue;
                 }
+                if (message.Type == "map.subscribe")
+                {
+                    try
+                    {
+                        double requestedHours = WireProtocol.ReadDouble(json, "hours", 5);
+                        if (double.IsNaN(requestedHours) || double.IsInfinity(requestedHours) || requestedHours != Math.Truncate(requestedHours))
+                            throw new ArgumentException("Invalid map duration.");
+                        MapWindowRequest window = WireProtocol.ReadBool(json, "active", true)
+                            ? new MapWindowRequest(WireProtocol.ReadBool(json, "automatic", true),
+                                WireProtocol.ReadDouble(json, "startOffset", 0), (int)requestedHours) : null;
+                        if (!bridge.Map.Subscribe(client.Id, window)) client.EnqueueText(WireProtocol.Error("map_busy", "Too many distinct map windows."));
+                    }
+                    catch (ArgumentException) { client.EnqueueText(WireProtocol.Error("invalid_map_window", "Invalid map time window.")); }
+                    continue;
+                }
                 if (message.Type != "command" || string.IsNullOrWhiteSpace(message.CommandId) || string.IsNullOrWhiteSpace(message.Name))
                 {
                     client.EnqueueText(WireProtocol.Error("invalid_command", "Command requires commandId and name."));
@@ -472,6 +501,8 @@ namespace ArmorOverhaul.ArmorControl.Transport
                 string currentLanguage = Volatile.Read(ref language);
                 foreach (ClientSession client in clients.Values)
                 {
+                    string map = bridge.Map.LatestFor(client.Id);
+                    if (map != null && !ReferenceEquals(map, client.LastMap)) { client.PublishMap(map); client.LastMap = map; }
                     // Reliable, change-only delivery, including clients joining an idle scene.
                     if (client.LastLanguage == currentLanguage) continue;
                     client.EnqueueText(WireProtocol.ServerSettings(currentLanguage));
@@ -772,6 +803,7 @@ namespace ArmorOverhaul.ArmorControl.Transport
             private string latestFlightPanel;
             private string latestAutomation;
             private string latestStructure;
+            private string latestMap;
 
             internal ClientSession(string id, TcpClient socket, NetworkStream stream, CancellationTokenSource cancellation)
             {
@@ -783,6 +815,7 @@ namespace ArmorOverhaul.ArmorControl.Transport
 
             internal string Id { get; private set; }
             internal string LastLanguage; // Owned exclusively by BroadcastLoop.
+            internal string LastMap;
             internal NetworkStream Stream { get; private set; }
 
             internal void PublishTelemetry(string json)
@@ -820,6 +853,8 @@ namespace ArmorOverhaul.ArmorControl.Transport
                 Interlocked.Exchange(ref latestStructure, json);
                 Signal();
             }
+
+            internal void PublishMap(string json) { Interlocked.Exchange(ref latestMap, json); Signal(); }
 
             internal void EnqueueText(string json)
             {
@@ -885,6 +920,8 @@ namespace ArmorOverhaul.ArmorControl.Transport
                     {
                         await WriteFrame(Stream, 1, Encoding.UTF8.GetBytes(structure), token).ConfigureAwait(false);
                     }
+                    string map = Interlocked.Exchange(ref latestMap, null);
+                    if (map != null) await WriteFrame(Stream, 1, Encoding.UTF8.GetBytes(map), token).ConfigureAwait(false);
                 }
             }
 

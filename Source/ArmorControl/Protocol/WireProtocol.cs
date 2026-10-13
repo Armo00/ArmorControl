@@ -12,7 +12,7 @@ namespace ArmorOverhaul.ArmorControl.Protocol
 
         internal static string Hello(string clientId)
         {
-            return "{\"type\":\"hello\",\"protocol\":1,\"clientId\":" + Quote(clientId)
+            return "{\"type\":\"hello\",\"protocol\":1,\"clientId\":" + Quote(clientId) + ",\"mapVersion\":1"
                 + ",\"capabilities\":[\"server.language.set\",\"telemetry.fast\",\"telemetry.regular\",\"telemetry.flightPanel\",\"telemetry.automation\",\"mechjeb.ascent.setting\",\"mechjeb.ascent\",\"mechjeb.ascent.targetLaunch\",\"mechjeb.landing\",\"mechjeb.docking\",\"mechjeb.rendezvous\",\"mechjeb.autowarp\",\"mechjeb.flightEnvelope\",\"trajectories.control\",\"target.catalog\",\"vessel.structure.live\",\"vessel.part.control\",\"vessel.part.actions\",\"vessel.view.selection\",\"vessel.aeroCenter.far\",\"vessel.crew.eva\",\"vessel.image.websocket\",\"recorder.incremental\",\"event.context\",\"event.vessel\",\"command.fifo\",\"command.idempotent\",\"control.deadman\",\"game.quicksave.load\",\"auth.sharedToken\",\"multiClient\"]}";
         }
 
@@ -21,7 +21,7 @@ namespace ArmorOverhaul.ArmorControl.Protocol
             return "{\"type\":\"server.settings\",\"language\":" + Quote(language) + "}";
         }
 
-        internal static string Health(int clients, RuntimeMetrics metrics, double fastSerializationAverageMs, double fastSerializationMaximumMs)
+        internal static string Health(int clients, RuntimeMetrics metrics, double fastSerializationAverageMs, double fastSerializationMaximumMs, string mapMetricsJson = "{}")
         {
             return "{\"status\":\"ok\",\"product\":\"ArmorControl\",\"protocol\":1,\"clients\":"
                 + clients.ToString(Invariant)
@@ -32,7 +32,7 @@ namespace ArmorOverhaul.ArmorControl.Protocol
                 + ",\"regularCaptureAverageMs\":" + Number(metrics.RegularAverageMs)
                 + ",\"regularCaptureMaximumMs\":" + Number(metrics.RegularMaximumMs)
                 + ",\"fastSerializationAverageMs\":" + Number(fastSerializationAverageMs)
-                + ",\"fastSerializationMaximumMs\":" + Number(fastSerializationMaximumMs) + "}}";
+                + ",\"fastSerializationMaximumMs\":" + Number(fastSerializationMaximumMs) + "},\"mapMetrics\":" + mapMetricsJson + "}";
         }
 
         internal static string Telemetry(TelemetrySnapshot value)
@@ -788,7 +788,7 @@ namespace ArmorOverhaul.ArmorControl.Protocol
             changes.Append(Quote(value));
         }
 
-        private static string Quote(string value)
+        internal static string Quote(string value)
         {
             if (value == null)
             {

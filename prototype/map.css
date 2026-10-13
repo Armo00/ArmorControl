@@ -1,0 +1,80 @@
+.map-view { max-width: none; --map-target: #c6a0ff; }
+.planet-map-layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; align-items: start; }
+.planet-map-panel { min-width: 0; border: 1px solid var(--line); background: var(--panel); }
+.planet-map-header { display: flex; justify-content: space-between; align-items: center; gap: 15px; padding: 15px; border-bottom: 1px solid var(--line); }
+.planet-map-header h2 { margin: 0 0 5px; font-size: 19px; }
+.planet-map-header small, #mapTextureSource { font-size: 12px; color: var(--muted); }
+#mapTextureSource { max-width: 50%; text-align: right; overflow-wrap: anywhere; }
+.planet-map-layers { display: flex; flex-wrap: wrap; gap: 8px 20px; padding: 8px 14px; border-bottom: 1px solid var(--line); }
+.planet-map-layers label, .planet-map-auto { display: flex; gap: 8px; align-items: center; font-size: 13px; min-height: 32px; }
+.planet-map-layers .planet-map-waypoint-toggle { min-height: 44px; color: var(--paper); cursor: pointer; }
+.planet-map-waypoint-toggle input { width: 18px; height: 18px; }
+.planet-map-waypoint-toggle input:focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; }
+.planet-map-layers .planet-map-target-toggle { min-height: 44px; color: var(--map-target); cursor: pointer; }
+.planet-map-target-toggle input { width: 18px; height: 18px; accent-color: var(--map-target); }
+.planet-map-target-toggle input:focus-visible { outline: 2px solid var(--map-target); outline-offset: 3px; }
+.map-view input { accent-color: var(--cyan); }
+.planet-map-stage { position: relative; width: 100%; min-width: 0; aspect-ratio: 2 / 1; min-height: 320px; background: var(--ink-2); overflow: hidden; }
+#planetMapCanvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%; touch-action: none; }
+.planet-map-north { position: absolute; left: 13px; top: 12px; padding: 5px 8px; color: var(--paper); background: var(--panel); pointer-events: none; font-size: 12px; }
+.planet-map-zoom { position: absolute; right: 12px; top: 12px; display: grid; gap: 6px; }
+.map-view button { background: var(--panel); color: var(--paper); border: 1px solid var(--line); border-radius: 3px; min-height: 38px; padding: 7px 12px; }
+.map-view button:hover { border-color: var(--cyan); }
+.planet-map-zoom button { min-width: 40px; padding: 6px; }
+.planet-map-actions { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 13px; border-top: 1px solid var(--line); }
+.planet-map-actions small { color: var(--muted); font-size: 12px; }
+.planet-map-coordinates { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; padding: 12px 14px; border-top: 1px solid var(--line); background: var(--ink-2); font-size: 12px; color: var(--muted); }
+.planet-map-coordinates b { color: var(--paper); margin-left: 8px; font-family: var(--mono, Consolas, monospace); font-weight: 500; }
+.planet-map-message { padding: 12px 14px; margin: 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
+.planet-map-message.is-warning { color: var(--amber); }
+.planet-map-source-key { display: flex; flex-wrap: wrap; gap: 7px 18px; padding: 12px 14px 0; color: var(--muted); font-size: 12px; }
+.planet-map-source-key span { display: flex; align-items: center; gap: 7px; }
+.planet-map-source-key i { width: 20px; border-top: 2px solid var(--cyan); }
+.planet-map-source-key .is-aero { border-color: var(--coral); }
+.planet-map-source-key .is-history { border-color: var(--muted); }
+.planet-map-source-key .is-target { border-color: var(--map-target); }
+.planet-map-target > b { display: block; color: var(--map-target); font-size: 14px; overflow-wrap: anywhere; }
+.planet-map-target > button { margin-top: 14px; min-height: 44px; width: 100%; }
+.planet-map-target > button:disabled { opacity: .5; cursor: default; }
+.planet-map-target > button:focus-visible { outline: 2px solid var(--map-target); outline-offset: 2px; }
+.planet-map-details { display: grid; gap: 14px; min-width: 0; }
+.planet-map-card { background: var(--panel); border: 1px solid var(--line); padding: 16px; }
+.planet-map-card h2 { margin: 0 0 15px; font-size: 17px; }
+.planet-map-orbit { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 10px; margin: 0; }
+.planet-map-card dt { color: var(--muted); font-size: 12px; margin-bottom: 5px; }
+.planet-map-card dd { margin: 0; font: 14px/1.5 Consolas, monospace; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.planet-map-card .is-negative { color: var(--coral); }
+.planet-map-auto { margin-bottom: 12px; }
+.planet-map-select-label { display: block; color: var(--muted); font-size: 12px; margin: 12px 0 6px; }
+.map-view select { width: 100%; font: inherit; color: var(--paper); background: var(--ink-2); border: 1px solid var(--line); min-height: 38px; border-radius: 3px; padding: 6px 8px; }
+.map-view select:focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; }
+.planet-map-start { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; margin-top: 10px; }
+.planet-map-start label { display: grid; gap: 5px; color: var(--muted); font-size: 12px; min-width: 0; }
+.planet-map-start select { padding: 6px 4px; }
+.planet-map-default { font-size: 12px; color: var(--muted); line-height: 1.6; margin: 10px 0; overflow-wrap: anywhere; }
+.planet-map-key { display: flex; gap: 9px; align-items: center; font-size: 12px; min-height: 33px; }
+.planet-map-key i { width: 22px; height: 0; flex-shrink: 0; border-top: 2px solid var(--cyan); }
+.planet-map-key.is-dashed i { border-top-style: dashed; }
+.planet-map-events { display: grid; gap: 12px; padding-top: 13px; margin: 13px 0 0; border-top: 1px solid var(--line); }
+.planet-map-waypoint-list { display: grid; gap: 6px; max-height: 260px; overflow-y: auto; }
+.planet-map-waypoint-list button { text-align: left; display: grid; gap: 3px; min-height: 44px; width: 100%; overflow-wrap: anywhere; }
+.planet-map-waypoint-list button.is-navigating { border-color: var(--amber); color: var(--amber); }
+.planet-map-waypoint-list small, .planet-map-waypoints > small { color: var(--muted); font-size: 11px; line-height: 1.6; }
+.planet-map-waypoints > small { display: block; margin-top: 12px; }
+.planet-map-waypoint-list button:focus-visible { outline: 2px solid var(--cyan); outline-offset: -2px; }
+@media (max-width: 1000px) {
+  .planet-map-layout { grid-template-columns: 1fr; }
+  .planet-map-details { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 560px) {
+  .planet-map-details { grid-template-columns: 1fr; }
+  .planet-map-stage { min-height: 300px; }
+  .planet-map-header { padding: 12px; }
+  .planet-map-header h2 { font-size: 17px; }
+  .planet-map-layers { gap: 4px 12px; }
+  .planet-map-actions small { width: 100%; }
+}
+@media (pointer: coarse) {
+  .map-view button, .map-view select, .planet-map-layers label, .planet-map-auto { min-height: 44px; }
+  .map-view select { font-size: 16px; }
+}

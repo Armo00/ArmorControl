@@ -15,6 +15,7 @@ namespace ArmorOverhaul.ArmorControl.Core
         private static Type settingsType;
         private static Type trajectoryType;
         private static Type scenarioType;
+        private static readonly TrajectoryScenarioCache scenarioCache = new TrajectoryScenarioCache();
         private static float nextBindingAttempt;
         private static float nextApiAttempt;
         private static bool fatalFailure;
@@ -281,6 +282,65 @@ namespace ArmorOverhaul.ArmorControl.Core
             return pathCache = json.Append(']').ToString();
         }
 
+        internal static MapPrediction CaptureMapPrediction(Vessel vessel)
+        {
+            var result = new MapPrediction();
+            string status;
+            if (vessel == null || !EnsureReady(out status)) return result;
+            try
+            {
+                Type owner = assembly.GetType("Trajectories.Trajectories");
+                if (!ReferenceEquals(GetStatic(owner, "AttachedVessel"), vessel)) { result.Status = "wrong_vessel"; return result; }
+                var patches = (GetStatic(trajectoryType, "Patches") as IEnumerable)?.Cast<object>().ToArray();
+                if (patches == null || patches.Length == 0) return result;
+                double now = Planetarium.GetUniversalTime();
+                result.FreshUt = Convert.ToDouble(PathMember(PathMember(patches[0], "StartingState"), "Time"));
+                if (result.FreshUt > now + 1 || now - result.FreshUt > Math.Max(10, TimeWarp.CurrentRate * 2 + 1))
+                { result.Status = "stale"; return result; }
+                foreach (object patch in patches)
+                {
+                    object start = PathMember(patch, "StartingState");
+                    if (!ReferenceEquals(PathMember(start, "ReferenceBody"), vessel.mainBody)) break;
+                    var segment = new MapPredictionPatch { Start = Convert.ToDouble(PathMember(start, "Time")), End = Convert.ToDouble(PathMember(patch, "EndTime")), Orbit = PathMember(patch, "SpaceOrbit") as Orbit };
+                    if (!MapGeometry.Finite(segment.Start) || !MapGeometry.Finite(segment.End) || segment.End <= segment.Start) break;
+                    Array atmosphere = PathMember(patch, "AtmosphericTrajectory") as Array;
+                    if (atmosphere != null && atmosphere.Length > 1)
+                    {
+                        // StartingState.Time is now when already inside the atmosphere, not
+                        // the historical entry instant. The map recorder supplies that history.
+                        if (!MapGeometry.Finite(result.EntryUt) && segment.Start > now + .1) result.EntryUt = segment.Start;
+                        segment.Atmosphere = new System.Collections.Generic.List<MapPoint>();
+                        int stride = Math.Max(1, (int)Math.Ceiling(atmosphere.Length / 1024d));
+                        for (int i = 0; i < atmosphere.Length; i += stride) AddMapPoint(segment.Atmosphere, atmosphere.GetValue(i), vessel.mainBody);
+                        AddMapPoint(segment.Atmosphere, atmosphere.GetValue(atmosphere.Length - 1), vessel.mainBody);
+                    }
+                    if (PathMember(patch, "ImpactPosition") is Vector3d)
+                    {
+                        result.ImpactUt = segment.End;
+                        if (segment.Atmosphere != null)
+                        {
+                            Vector3d p = GroundPoint(vessel.mainBody, (Vector3d)PathMember(patch, "ImpactPosition"), 0, true);
+                            segment.Atmosphere.Add(new MapPoint(segment.End, p.x, p.y, p.z));
+                        }
+                    }
+                    result.Patches.Add(segment);
+                }
+                result.Status = result.Patches.Count > 0 ? "ready" : "unavailable";
+            }
+            catch { result.Patches.Clear(); result.EntryUt = result.ImpactUt = double.NaN; result.Status = "unavailable"; }
+            return result;
+        }
+
+        private static void AddMapPoint(System.Collections.Generic.List<MapPoint> points, object point, CelestialBody body)
+        {
+            object position = PathMember(point, "pos"), stamp = PathMember(point, "time");
+            if (!(position is Vector3d) || stamp == null) return;
+            double ut = Convert.ToDouble(stamp);
+            Vector3d p = GroundPoint(body, (Vector3d)position, ut, GetSetting<bool>("BodyFixedMode"));
+            if (!MapGeometry.Finite(ut) || !MapGeometry.Finite(p.x) || !MapGeometry.Finite(p.y) || !MapGeometry.Finite(p.z)) return;
+            if (points.Count == 0 || ut > points[points.Count - 1].Ut) points.Add(new MapPoint(ut, p.x, p.y, p.z));
+        }
+
         private static void AddGroundPoint(System.Collections.Generic.List<Vector3d> points, object point, CelestialBody body)
         {
             if (PathMember(point, "pos") is Vector3d)
@@ -314,7 +374,12 @@ namespace ArmorOverhaul.ArmorControl.Core
             // Trajectories.Trajectories; doing that before KSP has created its ScenarioModule
             // makes the plugin's static logger null and permanently poisons the type initializer.
             // An existing ScenarioModule proves that KSP initialized the plugin in the right order.
-            if (UnityEngine.Object.FindObjectOfType(scenarioType) == null)
+            // FindObjectOfType(Type) scans all scene objects in KSP's Unity version.
+            // Reuse a validated module within this game/scene, but honor Unity's
+            // destroyed-object null check and reacquire after scene changes or loading saves.
+            if (scenarioCache.Get(HighLogic.CurrentGame, (int)HighLogic.LoadedScene,
+                () => UnityEngine.Object.FindObjectOfType(scenarioType),
+                value => (value as UnityEngine.Object) != null) == null)
             {
                 status = "Waiting for the Trajectories scenario module.";
                 return false;

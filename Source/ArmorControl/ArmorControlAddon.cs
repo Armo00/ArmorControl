@@ -23,6 +23,8 @@ namespace ArmorOverhaul.ArmorControl
 
         private readonly MainThreadBridge bridge = new MainThreadBridge();
         private VesselImageRenderer vesselImageRenderer;
+        private MapFlightSampler mapSampler;
+        private float nextMapWarning;
         private ArmorControlServer server;
         private ArmorControlSettings settings;
         private string webRoot;
@@ -97,6 +99,7 @@ namespace ArmorOverhaul.ArmorControl
 
             instance = this;
             vesselImageRenderer = new VesselImageRenderer(bridge);
+            mapSampler = new MapFlightSampler(bridge.Map);
             DontDestroyOnLoad(gameObject);
             bridge.CommandHandler = ExecuteCommand;
 
@@ -159,6 +162,15 @@ namespace ArmorOverhaul.ArmorControl
             bridge.DrainCommands(64);
             UpdateRemoteControlExpiry();
             UpdatePorkchop();
+            if (settings != null && settings.Enabled && mapSampler != null)
+            {
+                try { mapSampler.Tick(); }
+                catch (Exception exception)
+                {
+                    if (Time.realtimeSinceStartup >= nextMapWarning)
+                    { nextMapWarning = Time.realtimeSinceStartup + 10; Debug.LogWarning(LogPrefix + "map capture failed: " + exception.Message); }
+                }
+            }
 
             if (settings != null && settings.Enabled && Time.realtimeSinceStartup >= nextRegularTelemetry)
             {
@@ -204,7 +216,8 @@ namespace ArmorOverhaul.ArmorControl
                 serverStatus = "Server running";
                 nextServerStartAttempt = 0f;
                 RefreshLauncherIcon();
-                Debug.Log(LogPrefix + "v0.1.0 listening on " + settings.BindAddress + ":" + settings.Port
+                Debug.Log(LogPrefix + "v" + typeof(ArmorControlAddon).Assembly.GetName().Version.ToString(3)
+                    + " listening on " + settings.BindAddress + ":" + settings.Port
                     + " (fast " + settings.FastTelemetryHz + " Hz, regular " + settings.RegularTelemetryHz + " Hz), web root " + webRoot);
             }
             catch (Exception exception)
