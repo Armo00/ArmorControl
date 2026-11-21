@@ -43,6 +43,7 @@
 
   function setConnectionState(mode, label, detail) {
     state.connection = mode;
+    if (mode !== 'live') renderRetroLanding({});
     const pill = $('#connectionPill');
     pill.classList.remove('is-connecting', 'is-live', 'is-demo', 'is-offline', 'is-stale');
     pill.classList.add(`is-${mode}`);
@@ -244,6 +245,7 @@
   }
 
   function acceptTelemetry(message) {
+    if (state.currentSample?.data.vesselId !== message.vesselId) renderRetroLanding({});
     const now = performance.now();
     const previousConnection = state.connection;
     state.lastTelemetryAt = now;
@@ -456,6 +458,7 @@
   }
 
   function renderAutomation(message) {
+    if (message.vesselId === state.currentSample?.data.vesselId) renderRetroLanding(message);
     renderTargetCatalog(message);
     syncThrottleLock(message);
     renderFlightEnvelope(message);
@@ -495,7 +498,8 @@
     const autopilot = $('.autopilot-state');
     const modes = [];
     if (message.ascentEnabled) modes.push('Ascent guidance');
-    if (message.landingEnabled) modes.push(message.landingAtTarget ? 'Targeted landing' : 'Landing guidance');
+    if (message.suborbitalActive) modes.push('Retro Landing');
+    if (message.landingEnabled) modes.push(message.landingAtTarget ? 'Targeted landing' : 'MJ Landing');
     if (message.smartAssEnabled && message.smartAssTarget !== 'OFF') modes.push(`Smart A.S.S. / ${message.smartAssTarget || message.smartAssMode || 'ACTIVE'}`);
     const smartTargetLabels = {
       OFF: 'Off', KILLROT: 'Kill rotation', NODE: 'Nodes', SURFACE: 'Surface', PROGRADE: 'Prograde', RETROGRADE: 'Retrograde',
@@ -531,7 +535,7 @@
       return `Smart A.S.S. / <span>${escapeHtml(smartTargetLabels[target] || target)}</span>`;
     }).join(' + ') : 'Not engaged';
     if (autopilot) {
-      autopilot.querySelector('b').innerHTML = message.mechJebAvailable ? active : 'MechJeb Unavailable';
+      autopilot.querySelector('b').innerHTML = message.suborbitalActive || message.mechJebAvailable ? active : 'MechJeb Unavailable';
       autopilot.querySelector('small').textContent = modes.length ? 'MECHJEB CONTROL ACTIVE' : 'MANUAL CONTROL';
       autopilot.classList.toggle('is-active', modes.length > 0);
     }
@@ -1156,12 +1160,115 @@
     $('#porkTotal').textContent = Number.isFinite(cost) ? `${cost.toFixed(0)} m/s` : 'No valid solution';
   }
 
+  function retroReading(value, digits, unit) {
+    return Number.isFinite(value) ? value.toFixed(digits) + unit : '—';
+  }
+
+  function renderRetroLanding(message) {
+    const landing = message.retroLanding;
+    const flight = landing?.flight;
+    const tuning = landing?.tuning;
+    const live = state.connection === 'live' && Boolean(message.vesselId);
+    const phaseLabels = { Coast: 'Coast', Recoast: 'Recoast', EntryBurn: 'Entry burn', Main: 'Main braking',
+      Final: 'Final approach', Yolo: 'Emergency braking', Landed: 'Touchdown' };
+    const updateRequired = live && !landing && !state.serverCapabilities.has('recovery.retro');
+    $('#retroLandingStatus').textContent = landing ? phaseLabels[landing.status] || landing.status || 'Ready' : 'Waiting for data';
+    const note = $('#retroLandingReason');
+    const reason = updateRequired ? 'Retro Landing requires the updated ArmorControl DLL.' : landing?.reason;
+    if (sourceText(note) !== (reason || '')) note.textContent = reason || '';
+    note.hidden = !reason;
+    $('#retroLandingStart').hidden = Boolean(landing?.active);
+    $('#retroLandingStart').disabled = !live || !landing?.canStart;
+    $('#retroLandingStop').hidden = !landing?.active;
+    $('#retroLandingStop').disabled = !live;
+    $('#retroIgnition').textContent = retroReading(flight?.ignitionWait, 1, ' s');
+    $('#retroHeight').textContent = retroReading(flight?.height, 1, ' m');
+    $('#retroVerticalSpeed').textContent = retroReading(flight?.verticalSpeed, 1, ' m/s');
+    $('#retroHorizontalSpeed').textContent = retroReading(flight?.horizontalSpeed, 1, ' m/s');
+    $('#retroSurfaceSpeed').textContent = retroReading(flight?.surfaceSpeed, 1, ' m/s') +
+      (Number.isFinite(flight?.entrySpeed) ? ' / ' + retroReading(flight.entrySpeed, 0, ' m/s') : '');
+    $('#retroAoa').textContent = retroReading(flight?.pitchAoa, 1, '°') +
+      (Number.isFinite(flight?.targetAoa) ? ' / ' + retroReading(flight.targetAoa, 1, '°') : '');
+    $('#retroThrottle').textContent = Number.isFinite(message.suborbitalThrottle)
+      ? retroReading(message.suborbitalThrottle * 100, 1, '%') : '—';
+    $('#retroDrag').textContent = retroReading(message.suborbitalDrag, 2, ' m/s²');
+    for (const field of $$('[data-retro-setting]')) {
+      field.disabled = !live || !tuning;
+      if (document.activeElement === field) continue;
+      const actual = tuning?.[field.dataset.retroSetting];
+      if (field.type === 'checkbox') field.checked = actual === true;
+      else field.value = Number.isFinite(actual) ? String(Number(actual.toFixed(8))) : '';
+    }
+    $$('[data-command^="recovery.retro.defaults."]').forEach(button => { button.disabled = !live || !tuning; });
+    renderRetroEngineBay(landing?.engineBay, message.vesselId);
+  }
+
+  function renderRetroEngineBay(bay, vesselId) {
+    const engines = bay?.engines || [];
+    const engineKey = engine => engine.partId + ':' + engine.moduleIndex;
+    const select = $('#retroEngineSelect');
+    const nozzles = $('#retroNozzles');
+    const signature = JSON.stringify([vesselId, engines.map(engine => [engineKey(engine), engine.name, engine.label, engine.nozzles.length])]);
+    if (select.dataset.signature !== signature) {
+      const previous = select.dataset.vessel === vesselId ? select.value : '';
+      select.dataset.signature = signature;
+      select.dataset.vessel = vesselId || '';
+      select.replaceChildren(...engines.map(engine => {
+        const option = new Option(engine.label + ' · ' + engine.name, engineKey(engine));
+        option.setAttribute('data-l10n-skip', '');
+        return option;
+      }));
+      const preferred = engines.find(engine => engine.label === 'C') || engines[0];
+      select.value = engines.some(engine => engineKey(engine) === previous) ? previous : preferred ? engineKey(preferred) : '';
+      nozzles.replaceChildren(...engines.flatMap(engine => engine.nozzles.map((_, index) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'retro-nozzle';
+        button.textContent = engine.label;
+        button.setAttribute('data-l10n-skip', '');
+        button.setAttribute('aria-label', engine.name + ' · ' + (index + 1));
+        button.addEventListener('click', () => {
+          select.value = engineKey(engine);
+          renderRetroEngineBay(state.lastAutomation?.retroLanding?.engineBay, state.lastAutomation?.vesselId);
+        });
+        return button;
+      })));
+    }
+    select.disabled = engines.length === 0;
+    const distance = Math.max(0.2, bay?.radius || 0);
+    function position(element, point) {
+      element.style.left = (50 + 32 * (point[0] - bay.center[0]) / distance) + '%';
+      element.style.top = (50 - 32 * (point[1] - bay.center[1]) / distance) + '%';
+    }
+    let slot = 0;
+    for (const engine of engines) {
+      const selected = engineKey(engine) === select.value;
+      for (const point of engine.nozzles) {
+        const button = nozzles.children[slot++];
+        position(button, point);
+        button.classList.toggle('is-producing', engine.producing);
+        button.setAttribute('aria-pressed', String(selected));
+      }
+    }
+    const center = $('#retroThrustCenter');
+    center.hidden = !bay?.thrustCenter;
+    if (!center.hidden) position(center, bay.thrustCenter);
+    const engine = engines.find(item => engineKey(item) === select.value);
+    $('#retroTotalThrust').textContent = retroReading(bay?.thrust, 1, ' kN');
+    $('#retroProducing').textContent = bay ? bay.producing + ' / ' + engines.length : '—';
+    $('#retroCommanded').textContent = bay ? String(bay.commanded) : '—';
+    $('#retroEngineState').textContent = !engine ? '—' : engine.producing ? 'Producing thrust' : engine.commanded ? 'Selected for firing' : 'Off';
+    $('#retroEngineThrust').textContent = retroReading(engine?.thrust, 1, ' kN');
+  }
+
   function sendCommand(name, parameters = {}, quiet = false) {
     const serverSetting = name === 'server.language.set' && state.serverCapabilities.has(name);
     if (!state.socket || state.socket.readyState !== WebSocket.OPEN || (!serverSetting && state.connection !== 'live')) return false;
     const commandId = `${state.clientId || 'client'}-${Date.now()}-${++state.commandSequence}`;
     if (quiet) state.quietCommands.add(commandId);
-    state.socket.send(JSON.stringify({ type: 'command', commandId, name, sequence: state.commandSequence, ...parameters }));
+    const vesselBinding = name.startsWith('recovery.retro.') ? { expectedVesselId: state.currentSample?.data.vesselId } : {};
+    if (name.startsWith('recovery.retro.') && !vesselBinding.expectedVesselId) return false;
+    state.socket.send(JSON.stringify({ type: 'command', commandId, name, sequence: state.commandSequence, ...parameters, ...vesselBinding }));
     return commandId;
   }
 
@@ -1502,6 +1609,24 @@
     state.recorderRenderedAt = 0;
     renderRecorder(performance.now());
   }
+
+  function settingInputValue(input) {
+    return input.type === 'checkbox' ? input.checked : input.value.trim() === '' ? NaN : Number(input.value);
+  }
+
+  $$('[data-retro-setting]').forEach(input => input.addEventListener('change', () => {
+    const field = input.dataset.retroSetting;
+    const raw = settingInputValue(input);
+    if (input.type !== 'checkbox' && (!Number.isFinite(raw) || !input.validity.valid ||
+      (['maxG', 'finalSeconds', 'entryAltitudeKm', 'entrySpeed'].includes(field) && raw <= 0))) {
+      showToast('Invalid Retro Landing setting.');
+      return;
+    }
+    if (!sendCommand('recovery.retro.configure', {field, value: String(raw)}, true)) showToast('No live connection; command not sent');
+  }));
+  $('#retroEngineSelect').addEventListener('change', () => {
+    renderRetroEngineBay(state.lastAutomation?.retroLanding?.engineBay, state.lastAutomation?.vesselId);
+  });
 
   function escapeHtml(value) {
     return String(value ?? '').replace(/[&<>"']/g, character => ({
@@ -2268,6 +2393,7 @@
     button.addEventListener('click', () => {
       $$('.autopilot-tabs button').forEach(item => item.classList.toggle('is-active', item === button));
       $$('.auto-panel').forEach(panel => panel.classList.toggle('is-active', panel.dataset.autoView === button.dataset.autoPanel));
+      $('#autoWarpAutopilot').closest('.automation-global-options').hidden = button.dataset.autoPanel === 'retro-landing';
     });
   });
 
@@ -3264,9 +3390,10 @@
   const releaseControl = $('#releaseControl');
 
   function syncThrottleLock(automation = state.lastAutomation) {
-    const locked = Boolean(automation?.ascentEnabled || automation?.nodeExecutorEnabled || automation?.landingEnabled);
+    const locked = Boolean(automation?.ascentEnabled || automation?.nodeExecutorEnabled || automation?.landingEnabled || automation?.suborbitalActive);
     const justLocked = locked && !state.control.throttleLocked;
     state.control.throttleLocked = locked;
+    if (automation?.suborbitalActive && state.control.engaged) disarmContinuousControl(false);
     if (locked) state.control.throttle = 0;
     updateControlDisplay();
     if (justLocked && state.control.engaged) sendContinuousControl();
@@ -3279,7 +3406,11 @@
     controlRollKnob.style.setProperty('--roll-x', `${state.control.roll * rollTravel}px`);
     controlRollValue.textContent = `${state.control.roll >= 0 ? '+' : '−'}${Math.round(Math.abs(state.control.roll) * 100)}%`;
     controlThrottleFill.style.height = `${state.control.throttle * 100}%`;
-    controlThrottleValue.textContent = state.control.throttleLocked ? 'MJ LOCK' : `${Math.round(state.control.throttle * 100)}%`;
+    const retroActive = state.lastAutomation?.suborbitalActive;
+    const lockLabel = retroActive ? 'ArmorControl lock' : 'MJ LOCK';
+    controlJoystick.setAttribute('aria-disabled', String(Boolean(retroActive)));
+    controlRoll.setAttribute('aria-disabled', String(Boolean(retroActive)));
+    controlThrottleValue.textContent = state.control.throttleLocked ? lockLabel : `${Math.round(state.control.throttle * 100)}%`;
     controlThrottle.classList.toggle('is-locked', state.control.throttleLocked);
     controlThrottle.setAttribute('aria-disabled', state.control.throttleLocked ? 'true' : 'false');
     controlThrottle.title = state.control.throttleLocked ? 'MechJeb Web throttle locked during ascent, node execution or landing' : '';
@@ -3296,6 +3427,7 @@
   }
 
   function armContinuousControl() {
+    if (state.lastAutomation?.suborbitalActive) { showToast('Retro Landing has flight control.'); return false; }
     if (state.connection !== 'live') { showToast('No live connection; continuous control not enabled'); return false; }
     state.control.engaged = true;
     if (!state.controlTimer) state.controlTimer = setInterval(sendContinuousControl, 100);

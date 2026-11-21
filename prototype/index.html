@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="trajectory-layout.css">
   <link rel="stylesheet" href="map.css">
   <link rel="stylesheet" href="localization.css">
+  <link rel="stylesheet" href="retro-landing.css">
 </head>
 <body>
   <div class="app-shell">
@@ -537,7 +538,8 @@
 
         <div class="autopilot-tabs" role="tablist">
           <button class="is-active" data-auto-panel="ascent"><span>Ascent guidance</span><small>ASCENT GUIDANCE</small></button>
-          <button data-auto-panel="landing"><span>Landing guidance</span><small>LANDING GUIDANCE</small></button>
+          <button data-auto-panel="landing"><span>MJ Landing</span></button>
+          <button data-auto-panel="retro-landing"><span>Retro Landing</span></button>
           <button data-auto-panel="smartass"><span>Smart A.S.S.</span><small>ATTITUDE CONTROL</small></button>
           <button data-auto-panel="rendezvous"><span>Rendezvous autopilot</span><small>RENDEZVOUS AUTOPILOT</small></button>
           <button data-auto-panel="docking"><span>Docking autopilot</span><small>DOCKING AUTOPILOT</small></button>
@@ -658,6 +660,64 @@
                   <label><span>Slide fully right</span><output>0%</output></label>
                   <input type="range" min="0" max="100" step="1" value="0" aria-label="Slide to stage on ascent page">
                 </div>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section class="auto-panel" data-auto-view="retro-landing">
+          <div class="retro-landing-grid">
+            <section class="guidance-card">
+              <header><h2>Landing status</h2><b id="retroLandingStatus">Waiting for data</b></header>
+              <div class="prediction-values retro-readouts">
+                <div><span>Landing ignition in</span><b id="retroIgnition">—</b></div>
+                <div><span>Ground clearance</span><b id="retroHeight">—</b></div>
+                <div><span>Vertical speed</span><b id="retroVerticalSpeed">—</b></div>
+                <div><span>Horizontal speed</span><b id="retroHorizontalSpeed">—</b></div>
+                <div><span>Pitch AoA</span><b id="retroAoa">—</b></div>
+                <div><span>Surface speed</span><b id="retroSurfaceSpeed">—</b></div>
+                <div><span>Commanded throttle</span><b id="retroThrottle">—</b></div>
+                <div><span>Aerodynamic deceleration</span><b id="retroDrag">—</b></div>
+              </div>
+              <p class="retro-landing-note" id="retroLandingReason" role="status" hidden></p>
+              <div class="auto-command-bar">
+                <button class="primary-action" id="retroLandingStart" data-command="recovery.retro.start" disabled>Land along current track</button>
+                <button class="soft-button retro-stop" id="retroLandingStop" data-command="recovery.retro.stop" hidden>Stop recovery</button>
+              </div>
+            </section>
+            <section class="guidance-card retro-bay">
+              <header><h2>Engine bay</h2><b id="retroTotalThrust">—</b></header>
+              <div class="retro-bay-body">
+                <div class="retro-aft-plot" id="retroEnginePlot" role="group" aria-label="Engine bay aft view">
+                  <div id="retroNozzles"></div><span id="retroThrustCenter" aria-hidden="true" hidden></span>
+                </div>
+                <div class="retro-bay-readback">
+                  <label><span>Inspect engine</span><select id="retroEngineSelect" aria-label="Inspect engine" disabled></select></label>
+                  <dl>
+                    <div><dt>Producing thrust</dt><dd id="retroProducing">—</dd></div>
+                    <div><dt>Selected engines</dt><dd id="retroCommanded">—</dd></div>
+                    <div><dt>Engine state</dt><dd id="retroEngineState">—</dd></div>
+                    <div><dt>Thrust</dt><dd id="retroEngineThrust">—</dd></div>
+                  </dl>
+                  <p class="retro-bay-key"><span></span>Thrust center</p>
+                </div>
+              </div>
+            </section>
+            <section class="guidance-card retro-settings">
+              <header><h2>Landing settings</h2></header>
+              <div class="option-list">
+                <label><span>Maximum thrust acceleration</span><div class="unit-input"><input data-retro-setting="maxG" type="number" min="0" max="20" step="any" disabled><b>g</b></div></label>
+                <label><span>Final reserve</span><div class="unit-input"><input data-retro-setting="finalSeconds" type="number" min="0" step="any" disabled><b>s</b></div></label>
+                <label><span>Roll</span><div class="unit-input"><input data-retro-setting="roll" type="number" step="any" disabled><b>°</b></div></label>
+                <label><span>Coast pitch AoA</span><div class="unit-input"><input data-retro-setting="coastPitch" type="number" min="-90" max="90" step="any" disabled><b>°</b></div></label>
+                <label><span>Maximum ignition AGL</span><div class="unit-input"><input data-retro-setting="maxIgnitionKm" type="number" min="0" step="any" disabled><b>km</b></div></label>
+                <label><span>Entry burn altitude ASL</span><div class="unit-input"><input data-retro-setting="entryAltitudeKm" type="number" min="0" step="any" disabled><b>km</b></div></label>
+                <label><span>Entry target speed</span><div class="unit-input"><input data-retro-setting="entrySpeed" type="number" min="0" step="any" disabled><b>m/s</b></div></label>
+                <label class="check"><input data-retro-setting="optimizeFuel" type="checkbox" disabled><span></span>Optimize fuel</label>
+              </div>
+              <div class="auto-command-bar">
+                <button class="soft-button" data-command="recovery.retro.defaults.reset" disabled>Reset to defaults</button>
+                <button class="soft-button" data-command="recovery.retro.defaults.save" disabled>Save as defaults</button>
               </div>
             </section>
           </div>

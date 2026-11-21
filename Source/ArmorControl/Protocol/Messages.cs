@@ -522,6 +522,12 @@ namespace ArmorOverhaul.ArmorControl.Protocol
         internal double SmartAssSurfacePitch, SmartAssSurfaceYaw, SmartAssSurfaceRoll;
         internal double SmartAssVelocityPitch, SmartAssVelocityYaw, SmartAssVelocityRoll;
         internal double SmartAssRoll;
+        internal RetroLandingSnapshot RetroLanding;
+        internal string SuborbitalPhase, SuborbitalAirSource, SuborbitalController, SuborbitalWaitReason;
+        internal bool SuborbitalActive;
+        internal int SuborbitalEngineCount, SuborbitalBankChanges;
+        internal double SuborbitalDrag = double.NaN;
+        internal double SuborbitalThrottle = double.NaN;
         internal bool LandingEnabled;
         internal bool LandingAtTarget;
         internal bool LandingPredictionReady;

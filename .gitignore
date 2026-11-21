@@ -13,6 +13,8 @@ Thumbs.db
 
 # Machine-specific server configuration may contain an access token.
 settings.cfg
+/PluginData/RetroLanding.cfg
+/PluginData/RetroLanding.cfg.tmp
 *.log
 
 # Local-only test and packaging tools: DO NOT track or publish these directories.

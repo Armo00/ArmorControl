@@ -198,15 +198,16 @@ Vacuum sections use the actual orbit and body rotation. Atmospheric sections req
 </details>
 
 <details>
-<summary>Autopilot — five MechJeb panels</summary>
+<summary>Autopilot</summary>
 
 - **Ascent Guidance:** supported ascent profiles, orbit targets, launch timing options, guidance constraints, and live ascent and orbital readouts.
-- **Landing Guidance:** landing targets, guidance settings, prediction information, and automatic landing controls.
+- **MJ Landing:** MechJeb landing targets, guidance settings, predictions and autopilot controls.
+- **Retro Landing:** embedded braking and landing along the current track, with live settings and an engine aft view. The controller and view use non-solid engines. [Upstream updates and migration](Source/ArmorControl/RetroLanding/UPSTREAM.md)
 - **Smart A.S.S.:** attitude modes and editable offsets, with increment/decrement buttons and selectable angular steps.
 - **Rendezvous Autopilot:** supported rendezvous settings and execution controls.
 - **Docking Autopilot:** docking controls, axis selection, forced roll, and safe-distance and starting-distance overrides.
 
-![Autopilot — five MechJeb panels](Screenshot/Autopilot.png)
+![Autopilot](Screenshot/Autopilot.png)
 
 </details>
 

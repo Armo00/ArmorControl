@@ -1,0 +1,47 @@
+--- a/Ksp/KspLanding.cs
++++ b/Ksp/KspLanding.cs
+@@ -9,7 +9,6 @@
+ 
+ namespace KspRetroLanding
+ {
+-    [KSPAddon(KSPAddon.Startup.Flight, false)]
+     public sealed partial class KspLanding : MonoBehaviour
+     {
+         internal static KspLanding Instance { get; private set; }
+@@ -96,8 +95,7 @@
+         private void Awake()
+         {
+             Instance = this;
+-            settingsStore = new LandingSettingsStore(Path.Combine(KSPUtil.ApplicationRootPath,
+-                "GameData", "KSP_Landing_Assist", "PluginData", "Settings.cfg"));
++            settingsStore = OpenEmbeddedSettings();
+             settingsStore.Current.Apply(cfg, out rollDegrees);
+             SyncSettingsText();
+             GameEvents.onVesselGoOnRails.Add(OnVesselGoOnRails);
+@@ -105,7 +103,6 @@
+             GameEvents.onProtoVesselSave.Add(OnVesselSnapshotSave);
+             GameEvents.onHideUI.Add(HideUI);
+             GameEvents.onShowUI.Add(ShowUI);
+-            InitializeToolbar();
+         }
+         internal void Engage() { if (IsIdle) StartMode(Mode.Control); }
+         internal void Disengage() { StopMode("Recovery stopped", false); }
+@@ -759,6 +756,7 @@
+             }
+             double bodyPitchAoa = velocity.magnitude >= AttitudeGuidance.RetrogradeMinimumSpeed
+                 ? AttitudeGuidance.PitchAoa(surfaceRetrograde, AttitudeCoordinates(frame.up), localUp, north) : double.NaN;
++            CaptureEmbeddedFlight(command, flight, bodyPitchAoa, coastPitchAoa, lateral.magnitude);
+             WriteTrace(now, flight, command, error, actualThrust, supports, upright, ground, targetProjection, lateral.magnitude,
+                 unpoweredCoast, enginesFiring, velocity, pointing, rollError, bodyPitchAoa,
+                 rootBody == null ? 0 : Vector3.Dot(rootBody.angularVelocity, frame.up));
+--- a/Ksp/LandingEngineBay.cs
++++ b/Ksp/LandingEngineBay.cs
+@@ -6,7 +6,7 @@
+ 
+ namespace KspRetroLanding
+ {
+-    internal sealed class LandingEngineBay : IDisposable
++    internal sealed partial class LandingEngineBay : IDisposable
+     {
+         private static readonly Color Background = new Color(0.07f, 0.11f, 0.13f);
+         private static readonly Color Structure = new Color(0.41f, 0.55f, 0.57f);

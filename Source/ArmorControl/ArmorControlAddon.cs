@@ -22,6 +22,7 @@ namespace ArmorOverhaul.ArmorControl
         private static ArmorControlAddon instance;
 
         private readonly MainThreadBridge bridge = new MainThreadBridge();
+        private readonly RetroLandingControl suborbital = new RetroLandingControl();
         private VesselImageRenderer vesselImageRenderer;
         private MapFlightSampler mapSampler;
         private float nextMapWarning;
@@ -136,6 +137,15 @@ namespace ArmorOverhaul.ArmorControl
 
         private void FixedUpdate()
         {
+            if (suborbital.Active)
+            {
+                try { suborbital.Tick(); }
+                catch (Exception error)
+                {
+                    Debug.LogError(LogPrefix + "suborbital recovery interrupted: " + error);
+                    suborbital.Stop("Recovery interrupted");
+                }
+            }
             if (vesselImageRenderer != null)
             {
                 try { vesselImageRenderer.Tick(server != null && server.VesselImageClientCount > 0); }
@@ -159,6 +169,8 @@ namespace ArmorOverhaul.ArmorControl
                 TryStartServer();
             }
 
+            if (settings != null && settings.Enabled && HighLogic.LoadedSceneIsFlight && FlightGlobals.ready)
+                suborbital.Initialize(gameObject, 5);
             bridge.DrainCommands(64);
             UpdateRemoteControlExpiry();
             UpdatePorkchop();
@@ -1046,6 +1058,7 @@ namespace ArmorOverhaul.ArmorControl
             catch (Exception exception) { Debug.LogWarning(LogPrefix + "orbit geometry unavailable: " + exception.Message); }
             if (vessel == null) return snapshot;
             snapshot.VesselId = vessel.id.ToString("N");
+            suborbital.Report(vessel, snapshot);
             ITargetable target = FlightGlobals.fetch == null ? null : FlightGlobals.fetch.VesselTarget;
             snapshot.TargetName = target == null ? null : target.GetName();
             snapshot.TargetKind = TargetKind(target);
@@ -1413,15 +1426,41 @@ namespace ArmorOverhaul.ArmorControl
                 return CommandFailure("not_in_flight", "Command requires an active vessel in the Flight scene.");
 
             Vessel vessel = FlightGlobals.ActiveVessel;
+            string expectedVessel = WireProtocol.ReadString(message.RawJson, "expectedVesselId");
+            if (!string.IsNullOrEmpty(expectedVessel) && vessel.id.ToString("N") != expectedVessel)
+                return CommandFailure("vessel_changed", "The active vessel changed");
             MechJebCore core = null;
             if (message.Name.StartsWith("mechjeb.", StringComparison.Ordinal))
             {
                 core = vessel.GetMasterMechJeb();
                 if (core == null) return CommandFailure("mechjeb_unavailable", "No MechJeb core is available on the active vessel.");
+                if (suborbital.Active && StartsMechJebControl(message))
+                    return CommandFailure("recovery_active", "Stop ArmorControl recovery before starting another autopilot.");
             }
 
             switch (message.Name)
             {
+                case "recovery.suborbital.start":
+                case "recovery.retro.start":
+                    string problem = suborbital.Start(vessel);
+                    if (problem != null) return CommandFailure("recovery_unavailable", problem);
+                    ReleaseRemoteControl(false);
+                    return CommandSuccess("Retro Landing started.");
+                case "recovery.suborbital.stop":
+                case "recovery.retro.stop":
+                    suborbital.Stop("Recovery stopped");
+                    return CommandSuccess("Recovery stopped");
+                case "recovery.retro.configure":
+                    string tuningError = suborbital.UpdateSetting(WireProtocol.ReadString(message.RawJson, "field"),
+                        WireProtocol.ReadString(message.RawJson, "value"));
+                    return tuningError == null ? CommandSuccess("Retro Landing setting saved.") :
+                        CommandFailure("invalid_parameter", tuningError);
+                case "recovery.retro.defaults.save":
+                    return suborbital.UpdateDefaults(true) ? CommandSuccess("Retro Landing defaults saved.") :
+                        CommandFailure("recovery_unavailable", "Retro Landing controller unavailable.");
+                case "recovery.retro.defaults.reset":
+                    return suborbital.UpdateDefaults(false) ? CommandSuccess("Retro Landing settings restored.") :
+                        CommandFailure("recovery_unavailable", "Retro Landing controller unavailable.");
                 case "vessel.partGroup.set":
                     return SetPartGroup(vessel, WireProtocol.ReadString(message.RawJson, "kind"),
                         WireProtocol.ReadBool(message.RawJson, "enabled", false));
@@ -1991,6 +2030,7 @@ namespace ArmorOverhaul.ArmorControl
                     ToggleDeployables(vessel.FindPartModulesImplementing<ModuleDeployableAntenna>());
                     return CommandSuccess("Antennas toggled.");
                 case "vessel.control.set":
+                    if (suborbital.Active) return CommandFailure("recovery_active", "Retro Landing has flight control.");
                     remotePitch = Mathf.Clamp((float)WireProtocol.ReadDouble(message.RawJson, "pitch", 0), -1f, 1f);
                     remoteYaw = Mathf.Clamp((float)WireProtocol.ReadDouble(message.RawJson, "yaw", 0), -1f, 1f);
                     remoteRoll = Mathf.Clamp((float)WireProtocol.ReadDouble(message.RawJson, "roll", 0), -1f, 1f);
@@ -2005,7 +2045,7 @@ namespace ArmorOverhaul.ArmorControl
                         ? "Continuous attitude control updated; throttle is locked by the active MechJeb burn autopilot."
                         : "Continuous vessel control updated.");
                 case "vessel.control.release":
-                    ReleaseRemoteControl(true);
+                    ReleaseRemoteControl(!suborbital.Active);
                     return CommandSuccess("Continuous vessel control released.");
                 case "mechjeb.autostage.toggle":
                     MechJebModuleStagingController staging = core.GetComputerModule<MechJebModuleStagingController>();
@@ -2013,6 +2053,28 @@ namespace ArmorOverhaul.ArmorControl
                     return CommandSuccess("MechJeb autostaging " + (staging.enabled ? "enabled." : "disabled."));
                 default:
                     return CommandFailure("unknown_command", "Unknown ArmorControl command: " + message.Name);
+            }
+        }
+
+        private static bool StartsMechJebControl(IncomingMessage message)
+        {
+            switch (message.Name)
+            {
+                case "mechjeb.ascent.start":
+                case "mechjeb.landing.untargeted":
+                case "mechjeb.landing.target":
+                case "mechjeb.rendezvous.start":
+                case "mechjeb.docking.start":
+                case "mechjeb.node.executeOne":
+                case "mechjeb.node.executeAll":
+                case "mechjeb.smartass.set":
+                case "mechjeb.autostage.toggle":
+                    return true;
+                case "mechjeb.maneuver.create":
+                case "mechjeb.porkchop.create":
+                    return WireProtocol.ReadBool(message.RawJson, "execute", false);
+                default:
+                    return false;
             }
         }
 
@@ -2803,6 +2865,7 @@ namespace ArmorOverhaul.ArmorControl
         {
             if (instance == this)
             {
+                suborbital.Stop("Recovery stopped");
                 instance = null;
                 GameEvents.onGUIApplicationLauncherReady.Remove(CreateLauncherButton);
                 GameEvents.onGUIApplicationLauncherDestroyed.Remove(DestroyLauncherButton);

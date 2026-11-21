@@ -5,7 +5,7 @@ using System.Text.RegularExpressions;
 
 namespace ArmorOverhaul.ArmorControl.Protocol
 {
-    internal static class WireProtocol
+    internal static partial class WireProtocol
     {
         internal const int Version = 1;
         private static readonly CultureInfo Invariant = CultureInfo.InvariantCulture;
@@ -13,7 +13,7 @@ namespace ArmorOverhaul.ArmorControl.Protocol
         internal static string Hello(string clientId)
         {
             return "{\"type\":\"hello\",\"protocol\":1,\"clientId\":" + Quote(clientId) + ",\"mapVersion\":1"
-                + ",\"capabilities\":[\"server.language.set\",\"telemetry.fast\",\"telemetry.regular\",\"telemetry.flightPanel\",\"telemetry.automation\",\"mechjeb.ascent.setting\",\"mechjeb.ascent\",\"mechjeb.ascent.targetLaunch\",\"mechjeb.landing\",\"mechjeb.docking\",\"mechjeb.rendezvous\",\"mechjeb.autowarp\",\"mechjeb.flightEnvelope\",\"trajectories.control\",\"target.catalog\",\"vessel.structure.live\",\"vessel.part.control\",\"vessel.part.actions\",\"vessel.view.selection\",\"vessel.aeroCenter.far\",\"vessel.crew.eva\",\"vessel.image.websocket\",\"recorder.incremental\",\"event.context\",\"event.vessel\",\"command.fifo\",\"command.idempotent\",\"control.deadman\",\"game.quicksave.load\",\"auth.sharedToken\",\"multiClient\"]}";
+                + ",\"capabilities\":[\"recovery.retro\",\"server.language.set\",\"telemetry.fast\",\"telemetry.regular\",\"telemetry.flightPanel\",\"telemetry.automation\",\"mechjeb.ascent.setting\",\"mechjeb.ascent\",\"mechjeb.ascent.targetLaunch\",\"mechjeb.landing\",\"mechjeb.docking\",\"mechjeb.rendezvous\",\"mechjeb.autowarp\",\"mechjeb.flightEnvelope\",\"trajectories.control\",\"target.catalog\",\"vessel.structure.live\",\"vessel.part.control\",\"vessel.part.actions\",\"vessel.view.selection\",\"vessel.aeroCenter.far\",\"vessel.crew.eva\",\"vessel.image.websocket\",\"recorder.incremental\",\"event.context\",\"event.vessel\",\"command.fifo\",\"command.idempotent\",\"control.deadman\",\"game.quicksave.load\",\"auth.sharedToken\",\"multiClient\"]}";
         }
 
         internal static string ServerSettings(string language)
@@ -413,6 +413,16 @@ namespace ArmorOverhaul.ArmorControl.Protocol
             Append(json, "smartAssVelocityYaw", value.SmartAssVelocityYaw);
             Append(json, "smartAssVelocityRoll", value.SmartAssVelocityRoll);
             Append(json, "smartAssRoll", value.SmartAssRoll);
+            Append(json, "suborbitalActive", value.SuborbitalActive);
+            AppendNullable(json, "suborbitalController", value.SuborbitalController);
+            Append(json, "suborbitalThrottle", value.SuborbitalThrottle);
+            AppendNullable(json, "suborbitalPhase", value.SuborbitalPhase);
+            AppendNullable(json, "suborbitalWaitReason", value.SuborbitalWaitReason);
+            AppendNullable(json, "suborbitalAirSource", value.SuborbitalAirSource);
+            Append(json, "suborbitalDrag", value.SuborbitalDrag);
+            Append(json, "suborbitalEngineCount", value.SuborbitalEngineCount);
+            Append(json, "suborbitalBankChanges", value.SuborbitalBankChanges);
+            AppendRetroLanding(json, value.RetroLanding);
             Append(json, "landingEnabled", value.LandingEnabled);
             Append(json, "landingAtTarget", value.LandingAtTarget);
             Append(json, "landingPredictionReady", value.LandingPredictionReady);

@@ -198,15 +198,16 @@ Armor Control 已独立于 ArmorOverhaul。从旧的集成版本升级时，请�
 </details>
 
 <details>
-<summary>自动驾驶：五个 MechJeb 子页面</summary>
+<summary>自动驾驶</summary>
 
 - **自动发射：**上升剖面、目标轨道、发射时机、制导约束，以及实时发射与轨道读数。
-- **自动着陆：**着陆目标、制导设置、预测信息和自动着陆控制。
+- **MJ 着陆**提供 MechJeb 的着陆目标、设置、预测和控制。
+- **反推着陆**由内置控制器沿现有航迹执行反推和着陆。选发和箭底图仅包含非固体发动机，网页可实时调整参数。[上游更新与迁移](Source/ArmorControl/RetroLanding/UPSTREAM.md)
 - **Smart A.S.S.：**姿态模式及偏移输入，支持增减按钮和可选角度步长。
 - **自动交汇：**已支持的交汇设置及执行控制。
 - **自动对接：**对接控制、对接轴选择、强制滚转，以及安全距离和起始距离覆盖设置。
 
-![自动驾驶：五个 MechJeb 子页面](Screenshot/Autopilot.png)
+![自动驾驶](Screenshot/Autopilot.png)
 
 </details>
 

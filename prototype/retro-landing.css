@@ -1,0 +1,39 @@
+.autopilot-tabs { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+.retro-landing-grid [hidden], .automation-global-options[hidden] { display: none !important; }
+@media (max-width: 900px) {
+  .autopilot-tabs { display: flex; overflow-x: auto; }
+  .autopilot-tabs button { flex: 0 0 auto; min-height: 48px; white-space: nowrap; }
+}
+.retro-landing-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: 12px; }
+.retro-landing-grid .guidance-card { min-width: 0; align-self: start; }
+.retro-landing-grid header b { color: var(--cyan); font: 500 13px var(--mono); text-align: right; }
+.retro-landing-grid .auto-command-bar { border-width: 1px 0 0; }
+.retro-readouts > div { min-height: 68px; }
+.retro-landing-note { margin: 0; padding: 10px 14px; color: var(--muted); line-height: 1.5; }
+.retro-landing-grid .retro-stop { color: var(--coral); border-color: var(--coral); }
+.retro-settings { grid-column: 1 / -1; }
+.retro-settings .option-list { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.retro-settings .option-list > label { min-width: 0; }
+.retro-settings .unit-input input { min-width: 0; }
+.retro-bay-body { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(115px, .75fr); gap: 14px; padding: 14px; align-items: start; }
+.retro-aft-plot { position: relative; aspect-ratio: 1; width: 100%; max-width: 380px; justify-self: center; background: var(--ink-2); border: 1px solid var(--line); }
+.retro-aft-plot::before { content: ""; position: absolute; inset: 8%; border-radius: 50%; border: 1px solid var(--line); pointer-events: none; }
+.retro-aft-plot::after { content: ""; position: absolute; inset: 8%; background: linear-gradient(var(--line), var(--line)) center / 100% 1px no-repeat, linear-gradient(var(--line), var(--line)) center / 1px 100% no-repeat; pointer-events: none; }
+#retroNozzles { position: absolute; inset: 0; z-index: 1; }
+.retro-nozzle { --nozzle-color: var(--muted); position: absolute; transform: translate(-50%, -50%); width: clamp(22px, 10%, 40px); aspect-ratio: 1; padding: 0; border: 2px solid var(--nozzle-color); border-radius: 50%; color: var(--nozzle-color); background: var(--panel); font: 600 11px var(--mono); cursor: pointer; }
+.retro-nozzle.is-producing { --nozzle-color: var(--green); background: color-mix(in srgb, var(--green) 28%, var(--ink-2)); }
+.retro-nozzle[aria-pressed="true"] { z-index: 1; outline: 1px solid var(--cyan); outline-offset: 2px; }
+.retro-nozzle:focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; }
+#retroThrustCenter, .retro-bay-key span { display: inline-block; width: 8px; height: 8px; background: var(--amber); transform: rotate(45deg); }
+#retroThrustCenter { position: absolute; z-index: 2; transform: translate(-50%, -50%) rotate(45deg); pointer-events: none; }
+.retro-bay-readback label { display: grid; gap: 6px; color: var(--muted); }
+.retro-bay-readback select { min-height: 40px; width: 100%; min-width: 0; padding: 6px; border: 1px solid var(--line); background: var(--ink-2); color: var(--paper); text-overflow: ellipsis; }
+.retro-bay-readback dl { margin: 12px 0; }
+.retro-bay-readback dl > div { display: grid; gap: 4px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.retro-bay-readback dt, .retro-bay-key { color: var(--muted); font-size: 12px; }
+.retro-bay-readback dd { margin: 0; font: 500 13px var(--mono); }
+.retro-bay-key { display: flex; align-items: center; gap: 8px; margin: 0; }
+@media (max-width: 1050px) {
+  .retro-landing-grid { grid-template-columns: minmax(0, 1fr); }
+  .retro-settings .option-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
