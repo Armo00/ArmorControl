@@ -75,6 +75,7 @@ namespace LandingPoc
         public double GearSpeedLimit = 70;
         public double GearCommandAdvanceSeconds;
         public bool OptimizeFuel;
+        public bool OptimizeRecoveryTrajectory;
 
         internal Settings Copy() => (Settings)MemberwiseClone();
 
@@ -2117,6 +2118,8 @@ namespace LandingPoc
             return MinimumRunningThrust(group) <= limit ? limit : 0;
         }
 
+        internal double EntryTiltDegrees { get; set; }
+
         private Command ContinueEntryBurn(Flight s)
         {
             if (entryExitReason != null) return EndEntryBurn(s, entryExitReason);
@@ -2154,8 +2157,14 @@ namespace LandingPoc
             selected = group.Mask;
             double acceleration = thrust / s.Mass;
             double up = Math.Max(-1, Math.Min(1, -s.Vz / s.SurfaceSpeed));
-            return Output(s, selected, -acceleration * Math.Sqrt(1 - up * up), acceleration * up,
-                "entry burn, brake along surface retrograde");
+            double side = -Math.Sqrt(1 - up * up);
+            if (EntryTiltDegrees == 0 || s.Vx < 1)
+                return Output(s, selected, acceleration * side, acceleration * up,
+                    "entry burn, brake along surface retrograde");
+            double angle = EntryTiltDegrees * AttitudeGuidance.Degree;
+            double cosine = Math.Cos(angle), sine = Math.Sin(angle);
+            return Output(s, selected, acceleration * (side * cosine + up * sine),
+                acceleration * (up * cosine - side * sine), "entry burn, follow optimized trajectory");
         }
 
         private Command EndEntryBurn(Flight s, string reason)

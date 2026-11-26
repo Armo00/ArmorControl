@@ -53,6 +53,7 @@ namespace ArmorOverhaul.ArmorControl.Protocol
             Append(json, "entryAltitudeKm", value.Tuning.EntryAltitude / 1000);
             Append(json, "entrySpeed", value.Tuning.EntrySpeed);
             Append(json, "optimizeFuel", value.Tuning.OptimizeFuel);
+            Append(json, "optimizeRecoveryTrajectory", value.Tuning.OptimizeRecoveryTrajectory);
             json.Append('}');
             if (value.Flight is RetroLandingFlight flight)
             {

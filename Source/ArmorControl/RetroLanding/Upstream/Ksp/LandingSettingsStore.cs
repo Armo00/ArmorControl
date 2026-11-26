@@ -12,7 +12,7 @@ namespace KspRetroLanding
         internal double CoastPitchMin, CoastPitchMax;
         internal double BoostbackMaxG, EntryMaxG, BoostbackStartAoa, BoostbackFineDistance;
         internal double VesselTargetEastOffset, VesselTargetNorthOffset;
-        internal bool OptimizeFuel;
+        internal bool OptimizeFuel, OptimizeRecoveryTrajectory;
 
         internal LandingTuning(Settings settings, double roll)
         {
@@ -32,6 +32,7 @@ namespace KspRetroLanding
             EntryAltitude = settings.EntryBurnAltitude;
             EntrySpeed = settings.EntryBurnSpeed;
             OptimizeFuel = settings.OptimizeFuel;
+            OptimizeRecoveryTrajectory = settings.OptimizeRecoveryTrajectory;
         }
 
         internal void Apply(Settings settings, out double roll)
@@ -52,6 +53,7 @@ namespace KspRetroLanding
             settings.EntryBurnAltitude = EntryAltitude;
             settings.EntryBurnSpeed = EntrySpeed;
             settings.OptimizeFuel = OptimizeFuel;
+            settings.OptimizeRecoveryTrajectory = OptimizeRecoveryTrajectory;
         }
 
         public bool Equals(LandingTuning other) => SameFlightSettings(other) &&
@@ -66,7 +68,8 @@ namespace KspRetroLanding
                 FinalSeconds == other.FinalSeconds && Roll == other.Roll &&
                 CoastPitch == other.CoastPitch && CoastPitchMin.Equals(other.CoastPitchMin) &&
                 CoastPitchMax.Equals(other.CoastPitchMax) && MaxIgnitionAltitude == other.MaxIgnitionAltitude &&
-                EntryAltitude == other.EntryAltitude && EntrySpeed == other.EntrySpeed && OptimizeFuel == other.OptimizeFuel;
+                EntryAltitude == other.EntryAltitude && EntrySpeed == other.EntrySpeed && OptimizeFuel == other.OptimizeFuel &&
+                OptimizeRecoveryTrajectory == other.OptimizeRecoveryTrajectory;
         }
     }
 
@@ -149,7 +152,9 @@ namespace KspRetroLanding
                 MaxIgnitionAltitude = Number(node, "maxIgnitionAltitude", fallback.MaxIgnitionAltitude, 0),
                 EntryAltitude = Number(node, "entryAltitude", fallback.EntryAltitude, double.Epsilon),
                 EntrySpeed = Number(node, "entrySpeed", fallback.EntrySpeed, double.Epsilon),
-                OptimizeFuel = bool.TryParse(node.GetValue("optimizeFuel"), out bool fuel) ? fuel : fallback.OptimizeFuel
+                OptimizeFuel = bool.TryParse(node.GetValue("optimizeFuel"), out bool fuel) ? fuel : fallback.OptimizeFuel,
+                OptimizeRecoveryTrajectory = bool.TryParse(node.GetValue("optimizeRecoveryTrajectory"), out bool joint)
+                    ? joint : fallback.OptimizeRecoveryTrajectory
             };
         }
 
@@ -181,6 +186,7 @@ namespace KspRetroLanding
             node.AddValue("entryAltitude", values.EntryAltitude.ToString("R", Invariant));
             node.AddValue("entrySpeed", values.EntrySpeed.ToString("R", Invariant));
             node.AddValue("optimizeFuel", values.OptimizeFuel.ToString());
+            node.AddValue("optimizeRecoveryTrajectory", values.OptimizeRecoveryTrajectory.ToString());
             return node;
         }
 

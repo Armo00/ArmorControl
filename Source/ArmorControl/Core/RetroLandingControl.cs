@@ -135,6 +135,10 @@ namespace ArmorOverhaul.ArmorControl.Core
             {
                 if (!bool.TryParse(value, out tuning.OptimizeFuel)) return "Invalid Retro Landing setting.";
             }
+            else if (field == "optimizeRecoveryTrajectory")
+            {
+                if (!bool.TryParse(value, out tuning.OptimizeRecoveryTrajectory)) return "Invalid Retro Landing setting.";
+            }
             else if (field == "coastPitchMin" && value == "default")
                 tuning.CoastPitchMin = double.NaN;
             else if (field == "coastPitchMax" && value == "default")

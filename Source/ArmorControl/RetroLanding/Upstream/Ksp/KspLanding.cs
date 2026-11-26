@@ -311,6 +311,7 @@ namespace KspRetroLanding
             DrawVesselOffset("Vessel east offset (m)", ref vesselEastOffsetText, ref cfg.VesselTargetEastOffset);
             DrawVesselOffset("Vessel north offset (m)", ref vesselNorthOffsetText, ref cfg.VesselTargetNorthOffset);
             cfg.OptimizeFuel = GUILayout.Toggle(cfg.OptimizeFuel, "Optimize fuel");
+            cfg.OptimizeRecoveryTrajectory = GUILayout.Toggle(cfg.OptimizeRecoveryTrajectory, "Optimize recovery trajectory");
             var current = new LandingTuning(cfg, rollDegrees);
             GUILayout.BeginHorizontal();
             if (GUILayout.Button("Reset to defaults"))
@@ -761,6 +762,7 @@ namespace KspRetroLanding
                 out Command command, out Vector3d boostbackPointing);
             if (!boostback)
             {
+                controller.EntryTiltDegrees = TargetedEntryTilt;
                 command = controller.Tick(flight);
                 ObserveTargetedRecovery(command, flight);
             }
@@ -784,7 +786,9 @@ namespace KspRetroLanding
                 requested = thrustSide * horizontal + thrustUp * up;
             }
             Vector3d pointing = command.Phase == Phase.Boostback ? boostbackPointing :
-                command.Phase == Phase.EntryBurn ? braking :
+                command.Phase == Phase.EntryBurn ?
+                    (controller.EntryTiltDegrees != 0 && command.Engines != 0 && requested.sqrMagnitude > 1e-8
+                        ? requested.normalized : braking) :
                 UsesCoastAttitude(command.Phase, ignitionBlocked) ? coastPointing :
                 requested.sqrMagnitude > 1e-8 ? requested.normalized : up;
             Vector3d rawPointing = pointing;

@@ -54,6 +54,9 @@ namespace LandingPoc
         internal bool UsesFar => retrograde.Far && (!pitchedAvailable || pitched.Far);
         internal bool HasPitchSample => !IsAtmospheric || (pitchedAvailable && pitched.Valid);
 
+        internal FootprintAtmosphere WithPitchSample(FootprintAero sample) =>
+            sample.Valid ? new FootprintAtmosphere(depth, pressure, retrograde, sample, true) : null;
+
         internal FootprintAtmosphere BlendPitch(FootprintAtmosphere boundary, double fraction)
         {
             if (boundary == null || depth != boundary.depth || !HasPitchSample || !boundary.HasPitchSample)
@@ -102,8 +105,8 @@ namespace LandingPoc
     {
         internal string Status;
         internal double Along, Cross, Seconds, EntrySeconds, LandingSeconds, TouchdownMass;
-        internal double GlideRollSeconds, GlidePitchSeconds;
-        internal bool HasPoint, UsesFar, Atmospheric;
+        internal double GlideRollSeconds, GlidePitchSeconds, EntryDeltaV;
+        internal bool HasPoint, UsesFar, Atmospheric, EntryCompleted;
     }
 
     public sealed partial class Controller
@@ -112,7 +115,8 @@ namespace LandingPoc
         private bool footprintSimulation;
 
         internal Func<CancellationToken, TouchdownEstimate> CaptureFootprint(
-            Flight flight, FootprintAtmosphere atmosphere, double radius, FootprintGlideSteering glide = default)
+            Flight flight, FootprintAtmosphere atmosphere, double radius, FootprintGlideSteering glide = default,
+            FootprintAtmosphere entryAtmosphere = null, bool screenOnly = false)
         {
             Engine[] engines = (Engine[])specs.Clone();
             Settings settings = cfg.Copy();
@@ -124,6 +128,7 @@ namespace LandingPoc
             string entryExit = entryExitReason;
             int relightLimit = relightBankLimit;
             bool committed = CappedFinalCommitted, relightUsed = usedAlignmentRelight;
+            double entryTilt = EntryTiltDegrees;
             var masks = new long[cachedMasks.Count];
             cachedMasks.CopyTo(masks);
             flight.AeroForecast = null; // The live FAR forecast may still be growing.
@@ -145,18 +150,20 @@ namespace LandingPoc
                     relightShutdownMask = shutdownMask,
                     relightBankLimit = relightLimit,
                     usedAlignmentRelight = relightUsed,
-                    footprintSimulation = true
+                    footprintSimulation = true,
+                    EntryTiltDegrees = entryTilt
                 };
                 clone.cachedMasks.UnionWith(masks);
                 if (currentBank != 0) clone.cachedMasks.Add(currentBank);
                 if (currentPlan.Main != null) clone.cachedMasks.Add(currentPlan.Main.Mask);
                 if (currentPlan.Final != null) clone.cachedMasks.Add(currentPlan.Final.Mask);
-                return clone.TraceFootprint(flight, atmosphere, radius, glide, stop);
+                return clone.TraceFootprint(flight, atmosphere, radius, glide, entryAtmosphere, screenOnly, stop);
             };
         }
 
         private TouchdownEstimate TraceFootprint(Flight s, FootprintAtmosphere air, double radius,
-                                                FootprintGlideSteering glide, CancellationToken stop)
+                                                FootprintGlideSteering glide, FootprintAtmosphere entryAir,
+                                                bool screenOnly, CancellationToken stop)
         {
             var result = new TouchdownEstimate { Status = "no_plan", UsesFar = air.UsesFar, Atmospheric = air.IsAtmospheric };
             if (s.SolidBurnActive || s.Contact || phase == Phase.Yolo || s.Mass <= 0 || radius <= 0)
@@ -182,7 +189,7 @@ namespace LandingPoc
                     result.Status = "horizon";
                     return result;
                 }
-                double dt = phase == Phase.Coast && s.Height > 500 ? 0.25 : 0.05;
+                double dt = phase == Phase.Coast && s.Height > 500 ? (screenOnly ? 0.75 : 0.25) : 0.05;
                 cfg.SampleSeconds = dt;
                 double horizontal = Norm(vx, vy);
                 if (horizontal > 0.02) { headingX = vx / horizontal; headingY = vy / horizontal; }
@@ -201,8 +208,10 @@ namespace LandingPoc
                 if (rolling != previouslyRolling) nextAero = 0;
                 previouslyRolling = rolling;
                 bool pitched = glideWindow && !rolling && cfg.CoastPitchAoaDegrees != 0;
-                if (!air.Acceleration(s.SeaLevelAltitude, horizontal, s.Vz, s.Mass, pitched,
-                    out double aeroX, out double aeroUp, out double aeroCross, glide.BankDegrees))
+                bool tiltedEntry = entryAir != null && (entryCrossing || phase == Phase.EntryBurn) && horizontal >= 1;
+                var currentAir = tiltedEntry ? entryAir : air;
+                if (!currentAir.Acceleration(s.SeaLevelAltitude, horizontal, s.Vz, s.Mass, pitched || tiltedEntry,
+                    out double aeroX, out double aeroUp, out double aeroCross, tiltedEntry ? 0 : glide.BankDegrees))
                 {
                     result.Status = "waiting_aero";
                     return result;
@@ -223,7 +232,7 @@ namespace LandingPoc
                 if (coasting)
                 {
                     s.AlignmentSeconds = rolling ? 0 : Math.Abs(cfg.CoastPitchAoaAt(s.SeaLevelAltitude)) / 20;
-                    if (air.IsAtmospheric && result.Seconds >= nextAero)
+                    if (!screenOnly && air.IsAtmospheric && result.Seconds >= nextAero)
                     {
                         double mass = s.Mass;
                         s.AeroForecast = AeroCoastForecast.Integrate(s, cfg.Gravity,
@@ -247,8 +256,12 @@ namespace LandingPoc
                     cfg.IgnitionAltitudeBlocked(s.Height) &&
                     s.Height > cfg.MaxIgnitionAltitude + Math.Max(1000, -s.Vz * 15) &&
                     !(previousEntryAltitude > cfg.EntryBurnAltitude && s.SeaLevelAltitude <= cfg.EntryBurnAltitude);
+                if (phase == Phase.EntryBurn && result.EntrySeconds > 0 && s.SurfaceSpeed <= cfg.EntryBurnSpeed)
+                    result.EntryCompleted = true;
+                if (entryCrossing && horizontal >= 1 && EntryTiltDegrees != 0)
+                    s.AlignmentSeconds = Math.Max(s.AlignmentSeconds, Math.Abs(EntryTiltDegrees) / 30);
                 Command command;
-                if (skipPlanning)
+                if (skipPlanning || (screenOnly && coasting && !entryCrossing))
                 {
                     previousEntryAltitude = s.SeaLevelAltitude;
                     command = new Command { Phase = Phase.Coast };
@@ -308,18 +321,31 @@ namespace LandingPoc
                 s.AeroForecastAge += elapsed;
                 if (command.Phase == Phase.Coast && rolling) result.GlideRollSeconds += elapsed;
                 if (command.Phase == Phase.Coast && pitched) result.GlidePitchSeconds += elapsed;
-                if (command.Phase == Phase.EntryBurn && bank != null) result.EntrySeconds += elapsed;
-                if ((command.Phase == Phase.Main || command.Phase == Phase.Final) && bank != null)
-                    result.LandingSeconds += elapsed;
                 if (bank != null)
                 {
-                    double consumed = s.Mass - MassAfter(s.Mass, Norm(thrustX, thrustUp), elapsed, bank);
+                    double acceleration = Norm(thrustX, thrustUp);
+                    if (command.Phase == Phase.EntryBurn)
+                    {
+                        result.EntrySeconds += elapsed;
+                        result.EntryDeltaV += acceleration * elapsed;
+                    }
+                    if (command.Phase == Phase.Main || command.Phase == Phase.Final)
+                        result.LandingSeconds += elapsed;
+                    double consumed = s.Mass - MassAfter(s.Mass, acceleration, elapsed, bank);
                     if (s.Propellant != null && !s.Propellant.ConsumeForecast(bank.Mask, consumed))
                         return result;
                     s.Mass -= consumed;
                 }
                 if (nextHeight <= 0)
                 {
+                    if (screenOnly)
+                    {
+                        // The cheap pass ranks glide endpoints. It never certifies a landing.
+                        result.HasPoint = result.EntryCompleted;
+                        result.Status = "screened";
+                        result.TouchdownMass = s.Mass;
+                        return result;
+                    }
                     result.HasPoint = result.LandingSeconds > 0;
                     result.TouchdownMass = s.Mass;
                     if (result.HasPoint)
