@@ -1,6 +1,6 @@
 # Embedded Retro Landing
 
-ArmorControl builds the Retro Landing controller and its KSP integration from the source snapshot in `Upstream`. `upstream-revision.txt` records the exact commit from the `KSP_Landing_Assist` repository. `armorcontrol.patch` moves controller creation, configuration and telemetry into ArmorControl. The upstream revision excludes solid motors before constructing the engine catalog for both installations. The guidance source under `Upstream/Controller` follows the upstream revision. ArmorControl's adapter, web page and protocol are maintained separately from that snapshot.
+ArmorControl builds the Retro Landing controller and its KSP integration from the source snapshot in `Upstream`. `upstream-revision.txt` records the exact commit from the `KSP_Landing_Assist` repository. `armorcontrol.patch` moves controller creation, configuration and telemetry into ArmorControl. The upstream revision excludes solid motors before constructing the engine catalog for both installations. The sources under `Upstream` are the pinned upstream revision with `armorcontrol.patch` applied. The patch also carries the engine selection cache and search scheduling for ArmorControl. ArmorControl's adapter, web page and protocol are maintained separately from that snapshot.
 
 To update, prepare the desired commit in a local Retro Landing checkout. From the KSP installation directory, run the local import tool with the commit or branch you want to use.
 

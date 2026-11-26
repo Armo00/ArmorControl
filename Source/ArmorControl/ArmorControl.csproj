@@ -14,6 +14,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <EmbeddedResource Include="RetroLanding/Assets/toolbar-icon.png" LogicalName="KspRetroLanding.ToolbarIcon.png" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Reference Include="Assembly-CSharp">
       <HintPath>..\..\..\..\KSP_x64_Data\Managed\Assembly-CSharp.dll</HintPath>
       <Private>False</Private>

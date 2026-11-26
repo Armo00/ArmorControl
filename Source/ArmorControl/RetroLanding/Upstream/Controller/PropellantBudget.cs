@@ -22,12 +22,52 @@ namespace LandingPoc
     internal sealed class PropellantBudget
     {
         private readonly PropellantDemand[][] engines;
+        private Dictionary<int, double> forecastConsumed;
         private readonly Dictionary<long, Dictionary<int, PropellantDemand>> groups =
             new Dictionary<long, Dictionary<int, PropellantDemand>>();
 
         internal PropellantBudget(PropellantDemand[][] engines)
         {
             this.engines = engines;
+        }
+
+        internal PropellantBudget ForForecast() =>
+            new PropellantBudget(engines)
+            {
+                forecastConsumed = forecastConsumed == null
+                    ? new Dictionary<int, double>() : new Dictionary<int, double>(forecastConsumed)
+            };
+
+        internal bool ConsumeForecast(long mask, double tons)
+        {
+            if (Shortfall(mask, tons, 0, 0) > 1e-6) return false;
+            foreach (PropellantDemand resource in Demands(mask).Values)
+            {
+                forecastConsumed.TryGetValue(resource.Resource, out double before);
+                forecastConsumed[resource.Resource] = before + resource.Fraction * tons;
+            }
+            return true;
+        }
+
+        private double Remaining(PropellantDemand fuel) =>
+            forecastConsumed != null && forecastConsumed.TryGetValue(fuel.Resource, out double consumed)
+                ? Math.Max(0, fuel.ReachableTons - consumed) : fuel.ReachableTons;
+
+        internal double ReachableTons(long mask)
+        {
+            var reachable = new Dictionary<int, double>();
+            for (int i = 0; i < engines.Length; i++)
+            {
+                if ((mask & (1L << i)) == 0) continue;
+                foreach (PropellantDemand fuel in engines[i])
+                {
+                    reachable.TryGetValue(fuel.Resource, out double before);
+                    reachable[fuel.Resource] = Math.Max(before, Remaining(fuel));
+                }
+            }
+            double total = 0;
+            foreach (double quantity in reachable.Values) total += quantity;
+            return total;
         }
 
         internal double Shortfall(long firstMask, double firstTons, long finalMask, double finalTons)
@@ -39,18 +79,18 @@ namespace LandingPoc
             foreach (PropellantDemand resource in first.Values)
             {
                 PropellantDemand later;
-                double available = resource.ReachableTons;
+                double available = Remaining(resource);
                 double required = resource.Fraction * firstTons;
                 if (final.TryGetValue(resource.Resource, out later))
                 {
-                    available = Math.Min(available, later.ReachableTons);
+                    available = Math.Min(available, Remaining(later));
                     required += later.Fraction * finalTons;
                 }
                 shortage = Math.Max(shortage, required - available);
             }
             foreach (PropellantDemand resource in final.Values)
                 if (!first.ContainsKey(resource.Resource))
-                    shortage = Math.Max(shortage, resource.Fraction * finalTons - resource.ReachableTons);
+                    shortage = Math.Max(shortage, resource.Fraction * finalTons - Remaining(resource));
             return shortage;
         }
 

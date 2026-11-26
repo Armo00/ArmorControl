@@ -45,6 +45,16 @@ namespace LandingPoc
             return retrograde * Math.Cos(angle) + PitchUp(retrograde, up, north) * Math.Sin(angle);
         }
 
+        internal static AttitudeVector BankedCoastPointing(AttitudeVector retrograde, AttitudeVector up,
+            AttitudeVector north, double bankDegrees, double pitchDegrees, out AttitudeVector forward)
+        {
+            AttitudeVector pitchUp = Rotate(PitchUp(retrograde, up, north), retrograde, bankDegrees * Degree);
+            double angle = pitchDegrees * Degree;
+            double sine = Math.Sin(angle), cosine = Math.Cos(angle);
+            forward = pitchUp * cosine - retrograde * sine;
+            return retrograde * cosine + pitchUp * sine;
+        }
+
         internal static double PitchAoa(AttitudeVector retrograde, AttitudeVector pointing, AttitudeVector up,
                                         AttitudeVector north)
         {

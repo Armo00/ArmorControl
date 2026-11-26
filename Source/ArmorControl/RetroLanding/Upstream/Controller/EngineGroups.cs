@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 
 namespace LandingPoc
 {
@@ -139,12 +140,50 @@ namespace LandingPoc
         private readonly Engine[] engines;
         private readonly EngineMount[] mounts;
         private readonly Torque backup;
+        private readonly CancellationToken cancellation;
+        private readonly Action<long> publish;
 
         internal EngineGroups(Engine[] engines, Torque backup)
+            : this(engines, backup, MeasureInstallation(engines), default, null)
+        {
+        }
+
+        private EngineGroups(Engine[] engines, Torque backup, EngineMount[] mounts,
+                             CancellationToken cancellation, Action<long> publish)
         {
             this.engines = engines;
             this.backup = backup;
-            mounts = MeasureInstallation(engines);
+            this.mounts = mounts;
+            this.cancellation = cancellation;
+            this.publish = publish;
+        }
+
+        internal EngineGroups WithMeasurements(Engine[] snapshot, Torque torque,
+                                               CancellationToken cancellation = default, Action<long> publish = null) =>
+            new EngineGroups(snapshot, torque, mounts, cancellation, publish);
+
+        internal HashSet<long> PriorityMasks(long[] families)
+        {
+            var masks = new HashSet<long>(families) { EngineModuleCatalog.All(engines.Length) };
+            int[] slots = Enumerable.Range(0, engines.Length).Where(i => engines[i].HasMount).ToArray();
+            long center = 0;
+            for (int i = 0; i < engines.Length; i++)
+            {
+                long bit = 1L << i;
+                masks.Add(bit);
+                if (engines[i].HasMount && mounts[i].RingSquared <= MountingTolerance * MountingTolerance)
+                    center |= bit;
+            }
+            foreach (int i in slots)
+            {
+                long opposite = RotationOrbit(slots, i, 2, -1, 0);
+                if (opposite == 0 || opposite == (1L << i)) continue;
+                masks.Add(opposite);
+                masks.Add(opposite | center);
+            }
+            if (center != 0) masks.Add(center);
+            masks.Remove(0);
+            return masks;
         }
 
         private static EngineMount[] MeasureInstallation(Engine[] engines)
@@ -184,8 +223,12 @@ namespace LandingPoc
             if (running != 0 && running != available) AddSymmetricGroups(result, included, running);
             if (engines.Length <= EngineModuleCatalog.ExhaustiveLimit)
             {
-                for (long mask = 1; mask <= available; mask++)
-                    if ((mask & available) == mask && included.Add(mask)) AddIfUsable(result, mask);
+                for (long mask = available; mask != 0; mask = (mask - 1) & available)
+                {
+                    cancellation.ThrowIfCancellationRequested();
+                    publish?.Invoke(mask);
+                    if (included.Add(mask)) AddIfUsable(result, mask);
+                }
                 result.Sort((a, b) => a.Mask.CompareTo(b.Mask));
                 return;
             }
@@ -195,30 +238,6 @@ namespace LandingPoc
             // A group that can take over an already burning set cannot rely on
             // a complementary engine from the general available pool.
             if (running != 0 && running != available) Search(result, included, running, 0);
-            result.Sort((a, b) => a.Mask.CompareTo(b.Mask));
-        }
-
-        internal void PopulateFromMasks(List<EngineGroup> result, long available, long running, long[] editorMasks,
-                                        List<EngineGroup> previous, params long[] preserve)
-        {
-            result.Clear();
-            var included = new HashSet<long>();
-            AddKnownGroups(result, included, available, running, editorMasks, preserve);
-            for (int i = 0; i < engines.Length; i++)
-            {
-                long mask = 1L << i;
-                if ((available & mask) != 0 && included.Add(mask)) AddIfUsable(result, mask);
-            }
-            if (previous == null)
-            {
-                AddSymmetricGroups(result, included, available);
-                if (running != 0 && running != available) AddSymmetricGroups(result, included, running);
-            }
-            else
-            {
-                foreach (EngineGroup group in previous)
-                    if ((group.Mask & available) == group.Mask && included.Add(group.Mask)) AddIfUsable(result, group.Mask);
-            }
             result.Sort((a, b) => a.Mask.CompareTo(b.Mask));
         }
 
@@ -232,7 +251,14 @@ namespace LandingPoc
         private void AddIfUsable(List<EngineGroup> result, long mask)
         {
             EngineGroup group = MakeGroup(mask);
-            if (group.Evaluate(backup)) result.Add(group);
+            if (group.Evaluate(backup)) AddCandidate(result, group);
+        }
+
+        private void AddCandidate(List<EngineGroup> result, EngineGroup group)
+        {
+            cancellation.ThrowIfCancellationRequested();
+            result.Add(group);
+            publish?.Invoke(group.Mask);
         }
 
         internal EngineGroup MakeGroup(long mask)
@@ -249,6 +275,7 @@ namespace LandingPoc
                 .Where(i => (available & (1L << i)) != 0 && engines[i].Max > 0).ToArray();
             for (int order = 2; order <= slots.Length; order++)
             {
+                cancellation.ThrowIfCancellationRequested();
                 double angle = 2 * Math.PI / order;
                 double cos = Math.Cos(angle), sin = Math.Sin(angle);
                 var orbits = new List<EngineGroup>();
@@ -327,6 +354,7 @@ namespace LandingPoc
             var balancedOrder = Comparer<EngineGroup>.Create(EngineGroup.BalancedFirst);
             for (int depth = 0; depth < sorted.Length; depth++)
             {
+                cancellation.ThrowIfCancellationRequested();
                 var next = new Dictionary<long, EngineGroup>();
                 var usable = new List<EngineGroup>();
                 int inside = sorted[depth];
@@ -353,7 +381,7 @@ namespace LandingPoc
                 var withCurrent = nearest.Where(g => (g.Mask & running) == running);
                 foreach (EngineGroup group in nearest.Take(RetainedPerCount).Concat(mostThrust.Take(1))
                     .Concat(lowFloor.Take(1)).Concat(quickStart.Take(1)).Concat(withCurrent.Take(1)).Concat(mostBalanced.Take(1)))
-                    if (included.Add(group.Mask)) result.Add(group);
+                    if (included.Add(group.Mask)) AddCandidate(result, group);
 
                 // Keep unbalanced intermediate sets so an additional engine can
                 // cancel their moment. Search stays bounded for large clusters.

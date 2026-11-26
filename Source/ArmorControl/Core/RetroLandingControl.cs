@@ -26,6 +26,8 @@ namespace ArmorOverhaul.ArmorControl.Core
             if (pilot != null) return;
             pilot = host.AddComponent<KspLanding>();
             pilot.SetThrustLimit(defaultMaxG * Settings.G0);
+            pilot.NativeStart = source => Start(FlightGlobals.ActiveVessel, source);
+            pilot.NativeStop = () => Stop("Recovery stopped");
             foreach (AssemblyLoader.LoadedAssembly loaded in AssemblyLoader.loadedAssemblies)
                 if (loaded.assembly?.GetName().Name == "KSP_Landing_Assist")
                     standaloneLoaded = true;
@@ -46,12 +48,23 @@ namespace ArmorOverhaul.ArmorControl.Core
             return null;
         }
 
-        internal string Start(Vessel vessel)
+        internal string Start(Vessel vessel, LandingTargetSource? targetSource = null, string expectedTargetVesselId = null)
         {
             if (Active) return vessel == ship ? null : "Another recovery is active";
             string reason = CheckStart(vessel);
             if (reason != null) return reason;
             if (!HasEnabledEngine(vessel)) return "No enabled landing engine modules.";
+            if (targetSource == LandingTargetSource.Waypoint && !KspLanding.HasTargetedWaypoint(vessel))
+                return "Select a navigation waypoint on the current body.";
+            if (targetSource == LandingTargetSource.LandedVessel)
+            {
+                Vessel anchor = KspLanding.LandedTargetFor(vessel);
+                if (anchor == null) return "Select a landed vessel on the current body as the KSP target.";
+                if (!string.IsNullOrEmpty(expectedTargetVesselId) &&
+                    !string.Equals(expectedTargetVesselId, anchor.id.ToString("N"), StringComparison.OrdinalIgnoreCase))
+                    return "The selected landed vessel changed.";
+                expectedTargetVesselId = anchor.id.ToString("N");
+            }
 
             ship = vessel;
             lastVessel = vessel.id;
@@ -64,7 +77,16 @@ namespace ArmorOverhaul.ArmorControl.Core
                     EndMechJebFlight(mechJeb);
                     mechJeb.DeactivateControl = true;
                 }
-                pilot.EngageEmbedded();
+                if (targetSource.HasValue)
+                {
+                    if (!pilot.EngageTargetedEmbedded(targetSource.Value, expectedTargetVesselId: expectedTargetVesselId))
+                    {
+                        string failure = "Targeted control could not be initialized.";
+                        Stop(failure);
+                        return failure;
+                    }
+                }
+                else pilot.EngageEmbedded();
                 if (!pilot.IsIdle)
                 {
                     lastStatus = null;
@@ -113,6 +135,10 @@ namespace ArmorOverhaul.ArmorControl.Core
             {
                 if (!bool.TryParse(value, out tuning.OptimizeFuel)) return "Invalid Retro Landing setting.";
             }
+            else if (field == "coastPitchMin" && value == "default")
+                tuning.CoastPitchMin = double.NaN;
+            else if (field == "coastPitchMax" && value == "default")
+                tuning.CoastPitchMax = double.NaN;
             else
             {
                 if (!double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out double number) ||
@@ -120,9 +146,18 @@ namespace ArmorOverhaul.ArmorControl.Core
                 switch (field)
                 {
                     case "maxG" when number > 0 && number <= 20: tuning.MaxG = number; break;
+                    case "boostbackMaxG" when number > 0 && number <= 20: tuning.BoostbackMaxG = number; break;
+                    case "entryMaxG" when number > 0 && number <= 20: tuning.EntryMaxG = number; break;
+                    case "boostbackStartAoa" when number > 0 && number <= 180: tuning.BoostbackStartAoa = number; break;
+                    case "boostbackFineKm" when number > 0 && number <= double.MaxValue / 1000:
+                        tuning.BoostbackFineDistance = number * 1000; break;
                     case "finalSeconds" when number > 0: tuning.FinalSeconds = number; break;
                     case "roll": tuning.Roll = AttitudeGuidance.WrapDegrees(number); break;
                     case "coastPitch" when number >= -90 && number <= 90: tuning.CoastPitch = number; break;
+                    case "coastPitchMin" when number >= -90 && number <= 90: tuning.CoastPitchMin = number; break;
+                    case "coastPitchMax" when number >= -90 && number <= 90: tuning.CoastPitchMax = number; break;
+                    case "vesselTargetEastOffset": tuning.VesselTargetEastOffset = number; break;
+                    case "vesselTargetNorthOffset": tuning.VesselTargetNorthOffset = number; break;
                     case "maxIgnitionKm" when number >= 0 && number <= double.MaxValue / 1000:
                         tuning.MaxIgnitionAltitude = number * 1000; break;
                     case "entryAltitudeKm" when number > 0 && number <= double.MaxValue / 1000:
@@ -162,9 +197,13 @@ namespace ArmorOverhaul.ArmorControl.Core
             string reason = active ? pilot.DecisionReason : CheckStart(vessel);
             if (!active && reason == null && !HasEnabledEngine(vessel))
                 reason = "No enabled landing engine modules.";
+            Vessel landedTarget = !active && reason == null ? KspLanding.LandedTargetFor(vessel) : null;
             snapshot.RetroLanding = new RetroLandingSnapshot
             {
+                VesselTargetId = landedTarget?.id.ToString("N"), VesselTargetName = landedTarget?.vesselName,
                 Tuning = pilot.Tuning, Active = active, CanStart = !active && reason == null,
+                CanStartTargeted = !active && reason == null && KspLanding.HasTargetedWaypoint(vessel),
+                Targeted = active ? pilot.TargetedReadback : null,
                 Status = active ? pilot.CurrentPhase : vessel.id == lastVessel ? lastStatus : null,
                 Reason = reason, Flight = active ? pilot.FlightReadback : null, EngineBay = bay
             };

@@ -8,10 +8,20 @@ namespace ArmorOverhaul.ArmorControl.Protocol
         internal LandingTuning Tuning;
         internal bool Active;
         internal bool CanStart;
+        internal bool CanStartTargeted;
+        internal string VesselTargetId, VesselTargetName;
+        internal RetroTargetedSnapshot Targeted;
         internal string Status;
         internal string Reason;
         internal RetroLandingFlight? Flight;
         internal RetroEngineBaySnapshot EngineBay;
+    }
+
+    internal sealed class RetroTargetedSnapshot
+    {
+        internal string Waypoint, State, Warning;
+        internal bool Fallback, VesselTarget;
+        internal double Pitch, Bank, BoostRemaining, EastOffset, NorthOffset;
     }
 
     internal struct RetroLandingFlight
@@ -24,6 +34,14 @@ namespace ArmorOverhaul.ArmorControl.Protocol
         internal double TargetAoa;
         internal double SurfaceSpeed;
         internal double EntrySpeed;
+        internal RetroTouchdown? Touchdown;
+    }
+
+    internal struct RetroTouchdown
+    {
+        internal string Status, Waypoint;
+        internal bool HasPoint, UsesFar, Atmospheric;
+        internal double Latitude, Longitude, MissDistance, MissBearing, MissEast, MissNorth, Eta, EntrySeconds, LandingSeconds;
     }
 
     internal sealed class RetroEngineBaySnapshot

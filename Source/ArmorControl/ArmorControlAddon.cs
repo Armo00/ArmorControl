@@ -1,3 +1,4 @@
+using KspRetroLanding;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -1442,7 +1443,12 @@ namespace ArmorOverhaul.ArmorControl
             {
                 case "recovery.suborbital.start":
                 case "recovery.retro.start":
-                    string problem = suborbital.Start(vessel);
+                case "recovery.retro.targeted.start":
+                case "recovery.retro.vessel.start":
+                    LandingTargetSource? targetSource = null;
+                    if (message.Name == "recovery.retro.targeted.start") targetSource = LandingTargetSource.Waypoint;
+                    if (message.Name == "recovery.retro.vessel.start") targetSource = LandingTargetSource.LandedVessel;
+                    string problem = suborbital.Start(vessel, targetSource, WireProtocol.ReadString(message.RawJson, "expectedTargetVesselId"));
                     if (problem != null) return CommandFailure("recovery_unavailable", problem);
                     ReleaseRemoteControl(false);
                     return CommandSuccess("Retro Landing started.");

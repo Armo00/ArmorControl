@@ -1164,12 +1164,21 @@
     return Number.isFinite(value) ? value.toFixed(digits) + unit : '—';
   }
 
+  function retroWaypointOffset(value, positive, negative, inMeters = false) {
+    if (!Number.isFinite(value)) return '—';
+    const magnitude = (Math.abs(value) / (inMeters ? 1 : 1000)).toFixed(inMeters ? 1 : 2);
+    const distance = magnitude + (inMeters ? ' m' : ' km');
+    if (Number(magnitude) === 0) return distance;
+    const template = value > 0 ? positive : negative;
+    return window.ArmorI18n?.t(template, { distance }) || template.replace('{distance}', distance);
+  }
+
   function renderRetroLanding(message) {
     const landing = message.retroLanding;
     const flight = landing?.flight;
     const tuning = landing?.tuning;
     const live = state.connection === 'live' && Boolean(message.vesselId);
-    const phaseLabels = { Coast: 'Coast', Recoast: 'Recoast', EntryBurn: 'Entry burn', Main: 'Main braking',
+    const phaseLabels = { Coast: 'Coast', Recoast: 'Recoast', EntryBurn: 'Entry burn', Boostback: 'Boostback', Main: 'Main braking',
       Final: 'Final approach', Yolo: 'Emergency braking', Landed: 'Touchdown' };
     const updateRequired = live && !landing && !state.serverCapabilities.has('recovery.retro');
     $('#retroLandingStatus').textContent = landing ? phaseLabels[landing.status] || landing.status || 'Ready' : 'Waiting for data';
@@ -1179,6 +1188,43 @@
     note.hidden = !reason;
     $('#retroLandingStart').hidden = Boolean(landing?.active);
     $('#retroLandingStart').disabled = !live || !landing?.canStart;
+    const targeted = landing?.targeted;
+    const supported = state.serverCapabilities.has('recovery.retro.targeted');
+    const vesselSupported = state.serverCapabilities.has('recovery.retro.vessel');
+    const useVessel = vesselSupported && $('#retroTargetSource').value === 'vessel';
+    $('#retroTargetPicker').hidden = Boolean(landing?.active) || !live || !vesselSupported;
+    $('#retroTargetOffsets').hidden = !useVessel;
+    const start = $('#retroTargetedStart');
+    const startLabel = useVessel ? 'Land near target vessel' : 'Land at waypoint';
+    if (sourceText(start) !== startLabel) start.textContent = startLabel;
+    start.dataset.command = useVessel ? 'recovery.retro.vessel.start' : 'recovery.retro.targeted.start';
+    start.dataset.targetVesselId = useVessel ? landing?.vesselTargetId || '' : '';
+    start.hidden = Boolean(landing?.active) || (live && !supported && !vesselSupported);
+    start.disabled = !live || (useVessel ? !landing?.vesselTargetId : !supported || !landing?.canStartTargeted);
+    const missLabel = targeted?.vesselTarget ? 'Landing target miss distance' : 'Waypoint miss distance';
+    if (sourceText($('#retroMissLabel')) !== missLabel) $('#retroMissLabel').textContent = missLabel;
+    const targetedStatus = $('#retroTargetedStatus');
+    if (targeted) {
+      const stage = { Planning: 'Planning targeted Boostback', Boostback: 'Boostback',
+        Cutoff: 'Boostback cutoff', Recovery: 'Targeted approach' }[targeted.state];
+      const translate = text => window.ArmorI18n?.t(text) || text;
+      const status = targeted.fallback ? 'Standard landing (fallback)' : stage;
+      const offset = targeted.vesselTarget ? [
+        retroWaypointOffset(targeted.eastOffset, 'East {distance}', 'West {distance}', true),
+        retroWaypointOffset(targeted.northOffset, 'North {distance}', 'South {distance}', true)
+      ].join(' / ') : '';
+      targetedStatus.textContent = [targeted.waypoint, offset, status && translate(status),
+        targeted.warning && translate(targeted.warning)].filter(Boolean).join(' · ');
+    } else if (live && useVessel) {
+      const text = 'Select a landed vessel on the current body as the KSP target.';
+      targetedStatus.textContent = landing?.vesselTargetName ||
+        (landing?.canStart && !landing?.vesselTargetId ? (window.ArmorI18n?.t(text) || text) : '');
+    } else {
+      const text = 'Select a navigation waypoint on the current body.';
+      targetedStatus.textContent = live && supported && landing?.canStart && !landing?.canStartTargeted
+        ? (window.ArmorI18n?.t(text) || text) : '';
+    }
+    targetedStatus.hidden = !targetedStatus.textContent;
     $('#retroLandingStop').hidden = !landing?.active;
     $('#retroLandingStop').disabled = !live;
     $('#retroIgnition').textContent = retroReading(flight?.ignitionWait, 1, ' s');
@@ -1192,6 +1238,30 @@
     $('#retroThrottle').textContent = Number.isFinite(message.suborbitalThrottle)
       ? retroReading(message.suborbitalThrottle * 100, 1, '%') : '—';
     $('#retroDrag').textContent = retroReading(message.suborbitalDrag, 2, ' m/s²');
+    const footprint = flight?.touchdown;
+    const hasPoint = Number.isFinite(footprint?.latitude) && Number.isFinite(footprint?.longitude);
+    $('#retroTouchdown').textContent = hasPoint
+      ? retroReading(footprint.latitude, 5, '°') + ', ' + retroReading(footprint.longitude, 5, '°') : '—';
+    const miss = footprint?.missDistance;
+    $('#retroWaypointMiss').textContent = Number.isFinite(miss)
+      ? (footprint.waypoint ? footprint.waypoint + ' · ' : '') +
+        retroReading(miss / 1000, 2, ' km') : '—';
+    $('#retroWaypointEast').textContent = retroWaypointOffset(footprint?.missEast, 'East {distance}', 'West {distance}');
+    $('#retroWaypointNorth').textContent = retroWaypointOffset(footprint?.missNorth, 'North {distance}', 'South {distance}');
+    const footprintNote = $('#retroFootprintNote');
+    const statuses = {
+      calculating: 'Calculating touchdown estimate…',
+      waiting_aero: 'Waiting for an aerodynamic sample at the configured coast AoA.',
+      no_plan: 'Touchdown estimate unavailable for the current descent.',
+      horizon: 'Touchdown is outside the estimate window.',
+      hard_contact: 'The estimate predicts a fast contact.'
+    };
+    const parts = [];
+    if (footprint?.status && statuses[footprint.status]) parts.push(statuses[footprint.status]);
+    if (hasPoint && footprint.atmospheric && !footprint.far) parts.push('Estimate uses a simplified aerodynamic model.');
+    if (hasPoint && !Number.isFinite(miss) && !targeted?.vesselTarget) parts.push('Select a KSP navigation waypoint to see the miss distance.');
+    footprintNote.textContent = parts.map(text => window.ArmorI18n?.t(text) || text).join(' ');
+    footprintNote.hidden = parts.length === 0;
     for (const field of $$('[data-retro-setting]')) {
       field.disabled = !live || !tuning;
       if (document.activeElement === field) continue;
@@ -1199,6 +1269,8 @@
       if (field.type === 'checkbox') field.checked = actual === true;
       else field.value = Number.isFinite(actual) ? String(Number(actual.toFixed(8))) : '';
     }
+    $('#retroAoaRangeWarning').hidden = !tuning || ((tuning.coastPitchMin ?? tuning.coastPitch) <= tuning.coastPitch &&
+      tuning.coastPitch <= (tuning.coastPitchMax ?? tuning.coastPitch));
     $$('[data-command^="recovery.retro.defaults."]').forEach(button => { button.disabled = !live || !tuning; });
     renderRetroEngineBay(landing?.engineBay, message.vesselId);
   }
@@ -1616,14 +1688,21 @@
 
   $$('[data-retro-setting]').forEach(input => input.addEventListener('change', () => {
     const field = input.dataset.retroSetting;
-    const raw = settingInputValue(input);
-    if (input.type !== 'checkbox' && (!Number.isFinite(raw) || !input.validity.valid ||
-      (['maxG', 'finalSeconds', 'entryAltitudeKm', 'entrySpeed'].includes(field) && raw <= 0))) {
+    const useDefault = (field === 'coastPitchMin' || field === 'coastPitchMax') && input.value.trim() === '' &&
+      input.validity.valid;
+    const raw = useDefault ? 'default' : settingInputValue(input);
+    if (!useDefault && input.type !== 'checkbox' && (!Number.isFinite(raw) || !input.validity.valid ||
+      (['maxG', 'boostbackMaxG', 'entryMaxG', 'boostbackStartAoa', 'boostbackFineKm',
+        'finalSeconds', 'entryAltitudeKm', 'entrySpeed'].includes(field) && raw <= 0))) {
       showToast('Invalid Retro Landing setting.');
       return;
     }
     if (!sendCommand('recovery.retro.configure', {field, value: String(raw)}, true)) showToast('No live connection; command not sent');
   }));
+  $('#retroTargetSource').addEventListener('change', () => {
+    const latest = state.lastAutomation;
+    renderRetroLanding(latest && latest.vesselId === state.currentSample?.data.vesselId ? latest : {});
+  });
   $('#retroEngineSelect').addEventListener('change', () => {
     renderRetroEngineBay(state.lastAutomation?.retroLanding?.engineBay, state.lastAutomation?.vesselId);
   });
@@ -3224,7 +3303,10 @@
       button.dataset.confirmArmed = 'false';
       button.textContent = button.dataset.originalText;
     }
-    if (!sendCommand(button.dataset.command)) showToast('No live connection; command not sent');
+    const command = button.dataset.command;
+    const parameters = command === 'recovery.retro.vessel.start' ?
+      { expectedTargetVesselId: button.dataset.targetVesselId } : {};
+    if (!sendCommand(command, parameters)) showToast('No live connection; command not sent');
   }));
 
   $$('.auto-action').forEach(button => button.addEventListener('click', () => showToast(button.dataset.autoAction)));

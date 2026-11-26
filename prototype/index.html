@@ -678,10 +678,31 @@
                 <div><span>Surface speed</span><b id="retroSurfaceSpeed">—</b></div>
                 <div><span>Commanded throttle</span><b id="retroThrottle">—</b></div>
                 <div><span>Aerodynamic deceleration</span><b id="retroDrag">—</b></div>
+                <div><span>Estimated touchdown</span><b id="retroTouchdown">—</b></div>
+                <div><span id="retroMissLabel">Waypoint miss distance</span><b id="retroWaypointMiss">—</b></div>
+                <div><span>East–west offset</span><b id="retroWaypointEast">—</b></div>
+                <div><span>North–south offset</span><b id="retroWaypointNorth">—</b></div>
               </div>
+              <p class="retro-landing-note" id="retroFootprintNote" hidden></p>
+              <div class="retro-target-picker" id="retroTargetPicker" hidden>
+                <label class="retro-target-source">
+                  <span>Targeted landing source</span>
+                  <select id="retroTargetSource">
+                    <option value="waypoint">Active waypoint</option>
+                    <option value="vessel">Selected landed vessel</option>
+                  </select>
+                </label>
+                <div id="retroTargetOffsets" class="retro-target-offsets" hidden>
+                  <label><span>Vessel east offset</span><div class="unit-input"><input data-retro-setting="vesselTargetEastOffset" type="number" step="any" disabled><b>m</b></div></label>
+                  <label><span>Vessel north offset</span><div class="unit-input"><input data-retro-setting="vesselTargetNorthOffset" type="number" step="any" disabled><b>m</b></div></label>
+                  <small>Use negative values for west or south.</small>
+                </div>
+              </div>
+              <p class="retro-landing-note" id="retroTargetedStatus" role="status" hidden></p>
               <p class="retro-landing-note" id="retroLandingReason" role="status" hidden></p>
               <div class="auto-command-bar">
                 <button class="primary-action" id="retroLandingStart" data-command="recovery.retro.start" disabled>Land along current track</button>
+                <button class="primary-action" id="retroTargetedStart" data-command="recovery.retro.targeted.start" disabled>Land at waypoint</button>
                 <button class="soft-button retro-stop" id="retroLandingStop" data-command="recovery.retro.stop" hidden>Stop recovery</button>
               </div>
             </section>
@@ -706,15 +727,22 @@
             <section class="guidance-card retro-settings">
               <header><h2>Landing settings</h2></header>
               <div class="option-list">
-                <label><span>Maximum thrust acceleration</span><div class="unit-input"><input data-retro-setting="maxG" type="number" min="0" max="20" step="any" disabled><b>g</b></div></label>
+                <label><span>Landing max G</span><div class="unit-input"><input data-retro-setting="maxG" type="number" min="0" max="20" step="any" disabled><b>g</b></div></label>
+                <label><span>Boostback max G</span><div class="unit-input"><input data-retro-setting="boostbackMaxG" type="number" min="0" max="20" step="any" disabled><b>g</b></div></label>
+                <label><span>Entry max G</span><div class="unit-input"><input data-retro-setting="entryMaxG" type="number" min="0" max="20" step="any" disabled><b>g</b></div></label>
+                <label><span>Boostback start angle</span><div class="unit-input"><input data-retro-setting="boostbackStartAoa" type="number" min="0" max="180" step="any" disabled><b>°</b></div></label>
+                <label><span>Boostback fine range</span><div class="unit-input"><input data-retro-setting="boostbackFineKm" type="number" min="0" step="any" disabled><b>km</b></div></label>
                 <label><span>Final reserve</span><div class="unit-input"><input data-retro-setting="finalSeconds" type="number" min="0" step="any" disabled><b>s</b></div></label>
                 <label><span>Roll</span><div class="unit-input"><input data-retro-setting="roll" type="number" step="any" disabled><b>°</b></div></label>
-                <label><span>Coast pitch AoA</span><div class="unit-input"><input data-retro-setting="coastPitch" type="number" min="-90" max="90" step="any" disabled><b>°</b></div></label>
+                <label><span>Default coast AoA</span><div class="unit-input"><input data-retro-setting="coastPitch" type="number" min="-90" max="90" step="any" disabled><b>°</b></div></label>
+                <label><span>Minimum coast AoA</span><div class="unit-input"><input data-retro-setting="coastPitchMin" type="number" min="-90" max="90" step="any" placeholder="Default coast AoA" disabled><b>°</b></div></label>
+                <label><span>Maximum coast AoA</span><div class="unit-input"><input data-retro-setting="coastPitchMax" type="number" min="-90" max="90" step="any" placeholder="Default coast AoA" disabled><b>°</b></div></label>
                 <label><span>Maximum ignition AGL</span><div class="unit-input"><input data-retro-setting="maxIgnitionKm" type="number" min="0" step="any" disabled><b>km</b></div></label>
                 <label><span>Entry burn altitude ASL</span><div class="unit-input"><input data-retro-setting="entryAltitudeKm" type="number" min="0" step="any" disabled><b>km</b></div></label>
                 <label><span>Entry target speed</span><div class="unit-input"><input data-retro-setting="entrySpeed" type="number" min="0" step="any" disabled><b>m/s</b></div></label>
                 <label class="check"><input data-retro-setting="optimizeFuel" type="checkbox" disabled><span></span>Optimize fuel</label>
               </div>
+              <p class="retro-landing-note" id="retroAoaRangeWarning" role="status" hidden>Default coast AoA must be inside the configured bounds.</p>
               <div class="auto-command-bar">
                 <button class="soft-button" data-command="recovery.retro.defaults.reset" disabled>Reset to defaults</button>
                 <button class="soft-button" data-command="recovery.retro.defaults.save" disabled>Save as defaults</button>

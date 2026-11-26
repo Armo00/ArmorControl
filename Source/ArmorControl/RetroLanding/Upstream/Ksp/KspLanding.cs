@@ -67,10 +67,15 @@ namespace KspRetroLanding
         private string lastYoloState;
         private Vector3d horizontal = Vector3d.zero;
         private Rect window = new Rect(260, 100, 300, 145);
-        private string capText = "4";
+        private string capText = "4", boostbackCapText, entryCapText, boostbackStartAoaText, boostbackFineKmText;
+        private Vector2 settingsScroll;
+        internal Func<LandingTargetSource?, string> NativeStart;
+        internal Action NativeStop;
         private string finalReserveText;
         private string rollText = "0";
-        private string coastPitchAoaText, ignitionAltitudeText, entryAltitudeText, entrySpeedText;
+        private string coastPitchAoaText, coastPitchMinText, coastPitchMaxText;
+        private string ignitionAltitudeText, entryAltitudeText, entrySpeedText;
+        private string vesselEastOffsetText, vesselNorthOffsetText;
         private double rollDegrees;
         private double pitchTrim, yawTrim, lastTrimAoa = double.NaN;
         private RetrogradeAxisControl retrogradePitch, retrogradeYaw;
@@ -103,6 +108,7 @@ namespace KspRetroLanding
             GameEvents.onProtoVesselSave.Add(OnVesselSnapshotSave);
             GameEvents.onHideUI.Add(HideUI);
             GameEvents.onShowUI.Add(ShowUI);
+            InitializeToolbar();
         }
         internal void Engage() { if (IsIdle) StartMode(Mode.Control); }
         internal void Disengage() { StopMode("Recovery stopped", false); }
@@ -112,19 +118,56 @@ namespace KspRetroLanding
         {
             if (!IsIdle) throw new InvalidOperationException("Recovery is active.");
             if (settingsStore.HasCurrent) return;
-            cfg.MaxG = acceleration / Settings.G0;
+            cfg.MaxG = cfg.BoostbackMaxG = cfg.EntryMaxG = acceleration / Settings.G0;
             SyncSettingsText();
         }
 
         private void SyncSettingsText()
         {
             capText = cfg.MaxG.ToString("0.##", Invariant);
+            boostbackCapText = cfg.ThrustLimitFor(Phase.Boostback).ToString("0.##", Invariant);
+            entryCapText = cfg.ThrustLimitFor(Phase.EntryBurn).ToString("0.##", Invariant);
+            boostbackStartAoaText = cfg.BoostbackStartAoa.ToString("0.##", Invariant);
+            boostbackFineKmText = (cfg.BoostbackFineDistance / 1000).ToString("0.##", Invariant);
             finalReserveText = cfg.PrecisionSeconds.ToString("0.##", Invariant);
             rollText = rollDegrees.ToString("0.##", Invariant);
             coastPitchAoaText = cfg.CoastPitchAoaDegrees.ToString("0.##", Invariant);
+            coastPitchMinText = double.IsNaN(cfg.CoastPitchAoaMinimum) ? "" : cfg.CoastPitchAoaMinimum.ToString("0.##", Invariant);
+            coastPitchMaxText = double.IsNaN(cfg.CoastPitchAoaMaximum) ? "" : cfg.CoastPitchAoaMaximum.ToString("0.##", Invariant);
             ignitionAltitudeText = (cfg.MaxIgnitionAltitude / 1000).ToString("0.##", Invariant);
             entryAltitudeText = (cfg.EntryBurnAltitude / 1000).ToString("0.##", Invariant);
             entrySpeedText = cfg.EntryBurnSpeed.ToString("0.##", Invariant);
+            vesselEastOffsetText = cfg.VesselTargetEastOffset.ToString("R", Invariant);
+            vesselNorthOffsetText = cfg.VesselTargetNorthOffset.ToString("R", Invariant);
+        }
+
+        private static void DrawAoaBound(string label, ref string text, ref double bound)
+        {
+            GUILayout.BeginHorizontal();
+            GUILayout.Label(label, GUILayout.Width(135));
+            string previous = text;
+            text = GUILayout.TextField(text, 8, GUILayout.Width(55));
+            if (text != previous)
+            {
+                if (string.IsNullOrWhiteSpace(text)) bound = double.NaN;
+                else if (double.TryParse(text, NumberStyles.Float, Invariant, out double value) && value >= -90 && value <= 90)
+                    bound = value;
+            }
+            GUILayout.Label(double.IsNaN(bound) ? "Default coast AoA" : bound.ToString("0.##", Invariant));
+            GUILayout.EndHorizontal();
+        }
+
+        private static void DrawVesselOffset(string label, ref string text, ref double offset)
+        {
+            GUILayout.BeginHorizontal();
+            GUILayout.Label(label, GUILayout.Width(135));
+            string previous = text;
+            text = GUILayout.TextField(text, 14, GUILayout.Width(70));
+            if (text != previous && double.TryParse(text, NumberStyles.Float, Invariant, out double value) &&
+                FootprintAtmosphere.Finite(value))
+                offset = value;
+            GUILayout.Label("Active " + offset.ToString("0.##", Invariant));
+            GUILayout.EndHorizontal();
         }
 
         private void OnGUI()
@@ -141,36 +184,65 @@ namespace KspRetroLanding
         {
             if (IsIdle)
             {
-                if (GUILayout.Button("Start landing")) StartMode(Mode.Control, fromWindow: true);
+                if (GUILayout.Button("Land along current track")) StartFromMenu(null);
+                bool enabled = GUI.enabled;
+                GUI.enabled = enabled && HasTargetedWaypoint(FlightGlobals.ActiveVessel);
+                if (GUILayout.Button("Land at waypoint")) StartFromMenu(LandingTargetSource.Waypoint);
+                GUI.enabled = enabled && LandedTargetFor(FlightGlobals.ActiveVessel) != null;
+                if (GUILayout.Button("Land near target vessel")) StartFromMenu(LandingTargetSource.LandedVessel);
+                GUI.enabled = enabled;
             }
             else if (GUILayout.Button("Stop landing"))
-                Disengage();
+            {
+                if (NativeStop != null) NativeStop();
+                else Disengage();
+            }
             GUILayout.Label(state);
+            settingsScroll = GUILayout.BeginScrollView(settingsScroll, GUILayout.MaxHeight(Mathf.Max(120, Screen.height - 180)));
             Vessel active = FlightGlobals.ActiveVessel;
             if (active != null && active.loaded && active.ReferenceTransform != null)
                 engineBay.Draw(active, IsIdle ? null : engines, IsIdle ? 0 : Math.Max(0, lastMask));
             DrawSettings();
+            GUILayout.EndScrollView();
             GUI.DragWindow();
+        }
+
+        private void StartFromMenu(LandingTargetSource? source)
+        {
+            if (NativeStart != null)
+            {
+                string error = NativeStart(source);
+                if (error != null) state = error;
+                return;
+            }
+            if (source.HasValue) EngageTargetedEmbedded(source.Value, fromWindow: true);
+            else StartMode(Mode.Control, fromWindow: true);
         }
 
         private void HideUI() { uiHidden = true; }
         private void ShowUI() { uiHidden = false; }
 
+        private static void DrawPositiveSetting(string label, ref string text, ref double value, double maximum, double scale = 1)
+        {
+            GUILayout.BeginHorizontal();
+            GUILayout.Label(label, GUILayout.Width(150));
+            string previous = text;
+            text = GUILayout.TextField(text, 12, GUILayout.Width(65));
+            if (text != previous && double.TryParse(text, NumberStyles.Float, Invariant, out double edited) &&
+                edited > 0 && edited <= maximum) value = edited * scale;
+            GUILayout.Label((value / scale).ToString("0.##", Invariant));
+            GUILayout.EndHorizontal();
+        }
+
         private void DrawSettings()
         {
             var before = new LandingTuning(cfg, rollDegrees);
-            GUILayout.BeginHorizontal();
-            GUILayout.Label("Max thrust G", GUILayout.Width(100));
-            string val = GUILayout.TextField(capText, 7, GUILayout.Width(45));
-            double limit;
-            if (val != capText)
-            {
-                capText = val;
-                if (double.TryParse(val, NumberStyles.Float, Invariant, out limit) && limit > 0 && limit <= 20)
-                    cfg.MaxG = limit;
-            }
-            GUILayout.Label("Active " + cfg.MaxG.ToString("0.##", Invariant));
-            GUILayout.EndHorizontal();
+            DrawPositiveSetting("Landing max G", ref capText, ref cfg.MaxG, 20);
+            DrawPositiveSetting("Boostback max G", ref boostbackCapText, ref cfg.BoostbackMaxG, 20);
+            DrawPositiveSetting("Entry max G", ref entryCapText, ref cfg.EntryMaxG, 20);
+            DrawPositiveSetting("Boostback start angle (deg)", ref boostbackStartAoaText, ref cfg.BoostbackStartAoa, 180);
+            DrawPositiveSetting("Boostback fine range (km)", ref boostbackFineKmText, ref cfg.BoostbackFineDistance,
+                double.MaxValue / 1000, 1000);
             GUILayout.BeginHorizontal();
             GUILayout.Label("Final reserve (s)", GUILayout.Width(100));
             string previous = finalReserveText;
@@ -192,7 +264,7 @@ namespace KspRetroLanding
             GUILayout.Label("Active " + rollDegrees.ToString("0.##", Invariant));
             GUILayout.EndHorizontal();
             GUILayout.BeginHorizontal();
-            GUILayout.Label("Coast pitch AoA (deg)", GUILayout.Width(135));
+            GUILayout.Label("Default coast AoA (deg)", GUILayout.Width(135));
             previous = coastPitchAoaText;
             coastPitchAoaText = GUILayout.TextField(coastPitchAoaText, 8, GUILayout.Width(55));
             double pitchAoa;
@@ -201,6 +273,10 @@ namespace KspRetroLanding
                 cfg.CoastPitchAoaDegrees = pitchAoa;
             GUILayout.Label("Active " + cfg.CoastPitchAoaDegrees.ToString("0.##", Invariant));
             GUILayout.EndHorizontal();
+            DrawAoaBound("Min coast AoA (deg)", ref coastPitchMinText, ref cfg.CoastPitchAoaMinimum);
+            DrawAoaBound("Max coast AoA (deg)", ref coastPitchMaxText, ref cfg.CoastPitchAoaMaximum);
+            if (cfg.MinimumCoastPitch > cfg.CoastPitchAoaDegrees || cfg.CoastPitchAoaDegrees > cfg.MaximumCoastPitch)
+                GUILayout.Label("Default coast AoA must be inside the configured bounds.");
             GUILayout.BeginHorizontal();
             GUILayout.Label("Max ignition AGL (km)", GUILayout.Width(135));
             previous = ignitionAltitudeText;
@@ -232,6 +308,8 @@ namespace KspRetroLanding
                 cfg.EntryBurnSpeed = entrySpeed;
             GUILayout.Label("Active " + cfg.EntryBurnSpeed.ToString("0.##", Invariant));
             GUILayout.EndHorizontal();
+            DrawVesselOffset("Vessel east offset (m)", ref vesselEastOffsetText, ref cfg.VesselTargetEastOffset);
+            DrawVesselOffset("Vessel north offset (m)", ref vesselNorthOffsetText, ref cfg.VesselTargetNorthOffset);
             cfg.OptimizeFuel = GUILayout.Toggle(cfg.OptimizeFuel, "Optimize fuel");
             var current = new LandingTuning(cfg, rollDegrees);
             GUILayout.BeginHorizontal();
@@ -330,6 +408,8 @@ namespace KspRetroLanding
         private void ResetGuidance()
         {
             bool cappedFinalCommitted = controller != null && controller.CappedFinalCommitted;
+            ResetFootprint();
+            controller?.CancelCatalogSearch();
             ResetFinalGimbals();
             pitchTrim = yawTrim = 0;
             ResetRetrogradeControl();
@@ -482,6 +562,9 @@ namespace KspRetroLanding
         {
             if (suspendedForWarp) return;
             suspendedForWarp = true;
+            PauseTargeted();
+            ResetFootprint();
+            controller?.CancelCatalogSearch();
             rotationInput = Vector3.zero;
             throttle = 0;
             ullaging = false;
@@ -505,7 +588,7 @@ namespace KspRetroLanding
         {
             double now = Planetarium.GetUniversalTime();
             if (remoteTechHasConnection != null) remoteTechConnected = remoteTechHasConnection(remoteTechVesselId);
-            if (now >= nextThrust)
+            if (now >= nextThrust || controller.CoastIgnitionImminent(now))
             {
                 controller.RefreshThrust(MeasureSpecs(), BackupTorque());
                 nextThrust = now + 0.5;
@@ -515,21 +598,24 @@ namespace KspRetroLanding
             double vz = Vector3d.Dot(velocity, up);
             Vector3d lateral = velocity - vz * up;
             GroundReading ground = ReadGround(up, lateral, vz);
-            Vector3d lateralError = lateral - TerrainAvoidanceVelocity(now, up, ground, lateral, vz);
+            cfg.Gravity = vessel.mainBody.gravParameter / (vessel.CoMD - vessel.mainBody.position).sqrMagnitude;
+            Vector3d terrainVelocity = TerrainAvoidanceVelocity(now, up, ground, lateral, vz);
+            Vector3d lateralError = lateral - terrainVelocity - TargetedVelocity(up, lateral, ground, vz);
             if (lateralError.sqrMagnitude > 0.0001) horizontal = lateralError.normalized;
             Vector3d crossTrack = Vector3d.Cross(up, horizontal).normalized;
-            cfg.Gravity = vessel.mainBody.gravParameter / (vessel.CoMD - vessel.mainBody.position).sqrMagnitude;
             cfg.SampleSeconds = Time.fixedDeltaTime;
             AttitudeVector localUp = AttitudeCoordinates(up), north = LocalNorth(up);
             AttitudeVector surfaceRetrograde = attitude.SurfaceRetrograde(AttitudeCoordinates(velocity), AttitudeCoordinates(frame.up));
             double coastPitchAoa = cfg.CoastPitchAoaAt(ground.SeaLevelHeight);
+            bool bankedCoast = TryTargetedGlideAttitude(ground.SeaLevelHeight, surfaceRetrograde, localUp, north,
+                ref coastPitchAoa, out Vector3d bankedPointing, out AttitudeVector bankedForward);
             if (coastPitchAoa != lastTrimAoa)
             {
                 pitchTrim = yawTrim = 0;
                 lastTrimAoa = coastPitchAoa;
             }
-            Vector3d coastPointing = WorldDirection(AttitudeGuidance.CoastPointing(surfaceRetrograde, localUp, north,
-                coastPitchAoa));
+            Vector3d coastPointing = bankedCoast ? bankedPointing :
+                WorldDirection(AttitudeGuidance.CoastPointing(surfaceRetrograde, localUp, north, coastPitchAoa));
             Vector3d braking = WorldDirection(surfaceRetrograde);
             double tilt = Vector3.Angle(frame.up, (Vector3)braking);
             double upright = Vector3d.Dot(frame.up, up);
@@ -671,7 +757,13 @@ namespace KspRetroLanding
                 flight.Running == 0 && flight.Starting == 0;
             if (unpoweredCoast)
                 farCoast.Update(vessel, frame, coastPointing, now, ground.SeaLevelHeight, velocity, horizontal, up, cfg, ref flight);
-            Command command = controller.Tick(flight);
+            bool boostback = ReadTargetedCommand(flight, now, elapsed, up, velocity, thrustVector,
+                out Command command, out Vector3d boostbackPointing);
+            if (!boostback)
+            {
+                command = controller.Tick(flight);
+                ObserveTargetedRecovery(command, flight);
+            }
             DecisionReason = command.Reason;
             if (lastPhase == Phase.EntryBurn && command.Phase != Phase.EntryBurn)
             {
@@ -691,7 +783,8 @@ namespace KspRetroLanding
                 thrustSide = Math.Max(-thrustUp * tangent, Math.Min(0, thrustSide));
                 requested = thrustSide * horizontal + thrustUp * up;
             }
-            Vector3d pointing = command.Phase == Phase.EntryBurn ? braking :
+            Vector3d pointing = command.Phase == Phase.Boostback ? boostbackPointing :
+                command.Phase == Phase.EntryBurn ? braking :
                 UsesCoastAttitude(command.Phase, ignitionBlocked) ? coastPointing :
                 requested.sqrMagnitude > 1e-8 ? requested.normalized : up;
             Vector3d rawPointing = pointing;
@@ -724,7 +817,8 @@ namespace KspRetroLanding
             else
                 ResetFinalGimbals();
             AttitudeVector aim = AttitudeCoordinates(pointing);
-            AttitudeVector rollForward = attitude.RollForward(aim, localUp, north, rollDegrees, cfg.SampleSeconds);
+            bool pitchOnly = bankedCoast && command.Phase == Phase.Coast;
+            AttitudeVector rollForward = pitchOnly ? bankedForward : attitude.RollForward(aim, localUp, north, rollDegrees, cfg.SampleSeconds);
             // KSP's pilot-facing dorsal axis is minus the reference transform's forward axis.
             double rollError = AttitudeGuidance.RollError(AttitudeCoordinates(frame.up), AttitudeCoordinates(-frame.forward), aim, rollForward);
             double targetProjection = Vector3d.Dot(pointing, up);
@@ -774,7 +868,7 @@ namespace KspRetroLanding
                 state += string.Format(Invariant, "\nSurface speed {0:0} m/s | Target {1:0} m/s", flight.SurfaceSpeed, cfg.EntryBurnSpeed);
             if (mode == Mode.Control && command.Phase != Phase.Landed)
                 Execute(now, command, flight, pointing, rollError, startError, upright, targetProjection, actualThrust,
-                    mainStartAcceleration, finalSteering, finalDemand, finalAimRate, finalSettledAim);
+                    mainStartAcceleration, finalSteering, finalDemand, finalAimRate, finalSettledAim, pitchOnly);
             if (traceFinal)
                 WriteFinalDiagnostics(now, flight, command, ground, supports, velocity, thrustVector,
                     rawPointing, pointing, WorldDirection(rollForward), rollError, finalSteering, finalDemand, finalAimRate);
@@ -1066,7 +1160,7 @@ namespace KspRetroLanding
 
         private void Execute(double now, Command command, Flight flight, Vector3d pointing, double rollError, double alignment,
                              double upright, double targetProjection, double actualThrust, double mainStartAcceleration,
-                             bool finalSteering, double finalDemand, Vector3 finalAimRate, Vector3 finalSettledAim)
+                             bool finalSteering, double finalDemand, Vector3 finalAimRate, Vector3 finalSettledAim, bool pitchOnly)
         {
             if (vessel.ActionGroups[KSPActionGroup.SAS]) vessel.ActionGroups.SetGroup(KSPActionGroup.SAS, false);
             double angularBraking = 0;
@@ -1076,7 +1170,7 @@ namespace KspRetroLanding
                 angularBraking = Settings.TerminalTurnBraking;
             bool altitudeBlocked = cfg.IgnitionAltitudeBlocked(flight.Height);
             bool entryBurn = command.Phase == Phase.EntryBurn;
-            bool ignitionAllowed = entryBurn || !altitudeBlocked;
+            bool ignitionAllowed = command.Phase == Phase.Boostback || entryBurn || !altitudeBlocked;
             bool coasting = entryBurn || UsesCoastAttitude(command.Phase, altitudeBlocked);
             bool rcs = RcsEnabled;
             bool trackEntryRetrograde = actualThrust < 1 &&
@@ -1084,9 +1178,13 @@ namespace KspRetroLanding
             Phase steeringPhase = command.Phase == Phase.Final && !finalSteering ? Phase.Landed : command.Phase;
             rotationInput = TrackAttitude((Vector3)pointing, rollError, angularBraking, coasting, steeringPhase,
                 finalDemand, trackEntryRetrograde, now, finalAimRate, finalSettledAim);
+            if (pitchOnly) rotationInput.z = 0;
             if (command.DeployGear) vessel.ActionGroups.SetGroup(KSPActionGroup.Gear, true);
-            ullaging = false;
-            bool ready = ignitionAllowed && alignment <= Settings.IgnitionToleranceDegrees;
+            double ignitionAngle = command.Phase == Phase.Boostback ? command.BoostbackIgnitionAngle :
+                Settings.IgnitionToleranceDegrees;
+            long preparing = command.Engines == 0 ? flight.Restartable : command.Engines;
+            ullaging = command.PrepareBoostbackUllage && rcs && (flight.Unsettled & preparing) != 0;
+            bool ready = ignitionAllowed && alignment <= ignitionAngle;
             for (int i = 0; i < engines.Count; i++)
             {
                 EngineBinding e = engines[i];
@@ -1100,11 +1198,13 @@ namespace KspRetroLanding
                 {
                     bool unsettled = e.NeedsUllage && !e.Issued && e.Stability < 0.99;
                     if (double.IsNaN(e.RequestedAt) && (!unsettled || rcs))
-                        e.QueueStart(now, alignment / TurnDegreesPerSecond + (unsettled ? UllageAllowance : 0));
+                        e.QueueStart(now, (command.Phase == Phase.Boostback ?
+                            Math.Max(0, alignment - ignitionAngle) : alignment) / TurnDegreesPerSecond +
+                            (unsettled ? UllageAllowance : 0));
                     if (unsettled) ready = false;
                     // Continue settling while a starting engine still
                     // produces no thrust. RF can lose stability between ticks.
-                    ullaging |= rcs && e.NeedsUllage && alignment <= Settings.IgnitionToleranceDegrees;
+                    ullaging |= rcs && e.NeedsUllage && alignment <= ignitionAngle;
                 }
             }
             throttle = 0;
@@ -1143,7 +1243,7 @@ namespace KspRetroLanding
                 thrust = mass * netUp / projection;
             }
             if (!command.Emergency)
-                thrust = Math.Min(thrust, mass * cfg.MaxG * Settings.G0);
+                thrust = Math.Min(thrust, mass * cfg.ThrustLimitFor(command.Phase) * Settings.G0);
             // A nonzero RF throttle requests actual ignition. Its physical floor
             // is handled by the group planner.
             throttle = high > low ? Mathf.Clamp((float)((thrust - low) / (high - low)), (float)Settings.MinimumPositiveThrottle, 1) : 1;
@@ -1286,6 +1386,7 @@ namespace KspRetroLanding
             input.pitch = rotationInput.x;
             input.roll = rotationInput.y;
             input.yaw = rotationInput.z;
+            if (ullaging && RcsEnabled) input.Z = -1;
             if (!independentThrottle) return;
             if (unmanagedEngines.Exists(e => e.Engine != null && e.Engine.isEnabled && e.Engine.moduleIsEnabled &&
                 e.Engine.EngineIgnited && !e.Engine.independentThrottle))
@@ -1296,7 +1397,6 @@ namespace KspRetroLanding
                 if (vessel == FlightGlobals.ActiveVessel) FlightInputHandler.state.mainThrottle = input.mainThrottle;
                 masterThrottleOwned = true;
             }
-            if (ullaging && RcsEnabled) input.Z = -1;
         }
 
         private void ReleaseMasterThrottle(FlightCtrlState input = null)
@@ -1400,7 +1500,10 @@ namespace KspRetroLanding
                 ",entry_burn_asl_m,entry_burn_speed_mps,effective_coast_pitch_aoa_deg,planned_join_mass_t,planned_final_throttle" +
                 ",body_coast_pitch_aoa_deg,final_gimbal_limit_deg,master_throttle_owned" +
                 ",hull_clearance_m,wheel_bottom_offset_m,support_colliders_active,foot_raycast_hits" +
-                ",retrograde_pitch_authority_deg_s2,retrograde_yaw_authority_deg_s2,applied_pitch_input,applied_yaw_input");
+                ",retrograde_pitch_authority_deg_s2,retrograde_yaw_authority_deg_s2,applied_pitch_input,applied_yaw_input" +
+                ",latitude_deg,longitude_deg,touchdown_estimate_status,touchdown_estimate_lat_deg,touchdown_estimate_lon_deg" +
+                ",touchdown_waypoint_miss_m,touchdown_estimate_eta_s,touchdown_estimate_entry_s,touchdown_estimate_landing_burn_s" +
+                ",touchdown_waypoint_bearing_deg,touchdown_waypoint_east_m,touchdown_waypoint_north_m");
             engineTrace.WriteLine("ut,bit,flight_id,part,rf,ignitions,ullage,min_kn,max_kn,actual_kn,spool_s,spool_source,available,issued,faulted,armed,flameout,previous_throttle,rf_combusting,vessel_throttle,engine_propellant_available,remotetech_connected,engine_independent_throttle_fraction,is_solid");
             for (int i = 0; i < engines.Count; i++)
                 Debug.LogFormat("[RetroLanding] bit {0}: {1} flightID={2}", i, engines[i].Engine.part.name, engines[i].Engine.part.flightID);
@@ -1421,14 +1524,15 @@ namespace KspRetroLanding
             double requestedG = c.Engines == 0 ? 0 : Controller.Norm(c.Up, c.X) / Settings.G0;
             if (c.Engines != 0 && c.UsesTerminalGuidance && s.Running != 0)
                 requestedG = Math.Max(0, c.Up - s.ExternalUpAcceleration) / (Settings.G0 * Math.Max(0.5, targetProjection));
-            if (!c.Emergency) requestedG = Math.Min(requestedG, cfg.MaxG);
+            double phaseLimit = cfg.ThrustLimitFor(c.Phase);
+            if (!c.Emergency) requestedG = Math.Min(requestedG, phaseLimit);
             int deployed = gearModules.FindAll(g => g != null && g.fsm != null && g.fsm.CurrentState == g.st_deployed).Count;
             Collider surface = ground.Collider;
             Collider rawSurface = ground.RawCollider;
             string row = string.Format(Invariant,
                 "{0:F3},{1},{2},{3:F2},{4:F2},{5:F2},{6:F3},{7},{8},{9},{10},{11:F3},{12:F3},{13:F2},{14:F2},{15:F2},{16},{17},{18},{19},{20},{21},{22:F2},{23:F3},\"{24}\",{25},{26},{27:F2},{28:F2},{29:F2},{30},\"{31}\",{32},{33},{34:F2},{35},\"{36}\",{37:F2},{38:F2},{39:F2},{40:F2},{41:F2},{42:F2},{43:F2},{44:F2},{45:F2},{46:F2},{47:F2},{48:F2},{49:F2},{50:F5},{51},{52},{53:F2}",
                 now, mode, c.Phase, s.Height, horizontalSpeed, s.Vz, s.Mass, c.Engines, s.Running, s.Starting, s.Restartable,
-                requestedG, thrust / (s.Mass * Settings.G0), error, cfg.MaxG, c.IgnitionLead,
+                requestedG, thrust / (s.Mass * Settings.G0), error, phaseLimit, c.IgnitionLead,
                 s.GearCommanded, deployed, gearModules.Count, c.Emergency, supports, vessel.situation,
                 Math.Acos(Math.Max(-1, Math.Min(1, upright))) * 180 / Math.PI, s.LateralThrustDirection,
                 c.Reason.Replace("\"", "\"\""), c.YoloTrigger,
@@ -1476,7 +1580,7 @@ namespace KspRetroLanding
                 string.Format(Invariant, ",{0},{1},{2:F4},{3:F4}",
                     retrogradePitch.Authority > 0 ? (retrogradePitch.Authority / AttitudeGuidance.Degree).ToString("F3", Invariant) : "",
                     retrogradeYaw.Authority > 0 ? (retrogradeYaw.Authority / AttitudeGuidance.Degree).ToString("F3", Invariant) : "",
-                    vessel.ctrlState.pitch, vessel.ctrlState.yaw));
+                    vessel.ctrlState.pitch, vessel.ctrlState.yaw) + FootprintTrace());
             for (int i = 0; i < engines.Count; i++)
             {
                 EngineBinding e = engines[i];
@@ -1502,6 +1606,9 @@ namespace KspRetroLanding
         {
             Mode prior = mode;
             mode = Mode.Off;
+            StopTargeted();
+            ResetFootprint();
+            controller?.CancelCatalogSearch();
             throttle = 0;
             ullaging = false;
             ResetFinalGimbals();

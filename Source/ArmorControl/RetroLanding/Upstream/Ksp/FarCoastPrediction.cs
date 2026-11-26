@@ -28,6 +28,8 @@ namespace KspRetroLanding
         }
         private Capture pending, forecast;
         private int sampledFrame = -1;
+        private int footprintFrame = -1, spareSamples;
+        internal bool CanSampleFootprint => !failed && calculate != null && voxelizationValid != null;
         private bool failed;
 
         internal double MeasuredDrag { get; private set; }
@@ -72,7 +74,7 @@ namespace KspRetroLanding
                 {
                     sampledFrame = Time.frameCount;
                     if (pending != null && !SamePose(pending, frame.rotation, coastPitchAoa)) pending = null;
-                    int budget = SamplesPerFrame;
+                    int budget = SamplesPerFrame - (footprintFrame == Time.frameCount ? 1 : 0);
                     if (pending == null && (now >= retryAt ||
                         (forecast != null && coastPitchAoa != forecast.PitchAoa)))
                     {
@@ -97,12 +99,14 @@ namespace KspRetroLanding
                     if (pending != null)
                     {
                         pending.Path.Advance(pending.Gravity, pending.Sample, PlanningHorizonSeconds, budget);
+                        budget = 0;
                         if (pending.Path.Complete)
                         {
                             if (pending.Path.Duration > 0) forecast = pending;
                             pending = null;
                         }
                     }
+                    spareSamples = budget;
                 }
                 Capture usable = forecast;
                 if (usable == null || !SamePose(usable, frame.rotation, coastPitchAoa) ||
@@ -125,6 +129,41 @@ namespace KspRetroLanding
                 forecast = pending = null;
                 failed = true;
                 Debug.LogWarning("[RetroLanding] FAR prediction disabled for this engagement: " + ex.Message);
+            }
+        }
+
+        internal bool TryFootprintAero(Vessel vessel, Transform frame, Vector3d velocity, Vector3d up,
+                                       Vector3d pointing, double altitude, double pressure, out FootprintAero coefficients, Vector3d? dorsal = null)
+        {
+            coefficients = default;
+            int frameId = Time.frameCount;
+            if (!CanSampleFootprint || footprintFrame == frameId || (sampledFrame == frameId && spareSamples == 0) ||
+                pressure <= 0 || velocity.sqrMagnitude < 4 || !voxelizationValid(vessel)) return false;
+            footprintFrame = frameId;
+            try
+            {
+                Quaternion pose = dorsal.HasValue ?
+                    Quaternion.LookRotation((Vector3)dorsal.Value, (Vector3)pointing) *
+                        Quaternion.Inverse(Quaternion.LookRotation(-frame.forward, frame.up)) :
+                    Quaternion.FromToRotation(frame.up, (Vector3)pointing);
+                calculate(vessel, out Vector3 force, out _, Quaternion.Inverse(pose) * (Vector3)velocity, altitude);
+                Vector3d aero = (Vector3d)(pose * force);
+                Vector3d direction = velocity.normalized;
+                Vector3d lift = (up - Vector3d.Dot(up, direction) * direction).normalized;
+                Vector3d cross = Vector3d.Cross(up, direction).normalized;
+                double q = pressure * velocity.sqrMagnitude;
+                double drag = -Vector3d.Dot(aero, direction) / q;
+                double upForce = Vector3d.Dot(aero, lift) / q;
+                double sideForce = Vector3d.Dot(aero, cross) / q;
+                if (!FootprintAtmosphere.Finite(drag) || drag < 0 ||
+                    !FootprintAtmosphere.Finite(upForce) || !FootprintAtmosphere.Finite(sideForce)) return false;
+                coefficients = new FootprintAero(drag, upForce, sideForce, true);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning("[RetroLanding] Touchdown aero sample failed: " + ex.Message);
+                return false;
             }
         }
 

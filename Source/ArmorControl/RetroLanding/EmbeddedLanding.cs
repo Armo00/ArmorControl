@@ -43,13 +43,19 @@ namespace KspRetroLanding
         {
             tuning.Apply(cfg, out rollDegrees);
             settingsStore.SaveCurrent(tuning);
+            SyncSettingsText();
         }
 
         internal void SaveDefaults() => settingsStore.SaveDefaults(Tuning);
-        internal void ResetDefaults() => settingsStore.Reset().Apply(cfg, out rollDegrees);
+        internal void ResetDefaults()
+        {
+            settingsStore.Reset().Apply(cfg, out rollDegrees);
+            SyncSettingsText();
+        }
 
         internal void EngageEmbedded()
         {
+            StopTargeted();
             embeddedFlight = null;
             Engage();
         }
@@ -65,7 +71,8 @@ namespace KspRetroLanding
                     ? command.PlannedIgnitionWait : double.NaN,
                 PitchAoa = pitchAoa, TargetAoa = command.Phase == Phase.Coast ? targetAoa : double.NaN,
                 SurfaceSpeed = flight.SurfaceSpeed,
-                EntrySpeed = command.Phase == Phase.EntryBurn ? cfg.EntryBurnSpeed : double.NaN
+                EntrySpeed = command.Phase == Phase.EntryBurn ? cfg.EntryBurnSpeed : double.NaN,
+                Touchdown = ReadFootprint(command, flight)
             };
         }
 

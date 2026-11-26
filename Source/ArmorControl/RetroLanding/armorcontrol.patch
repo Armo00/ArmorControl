@@ -1,3 +1,1821 @@
+--- a/Controller/AttitudeGuidance.cs
++++ b/Controller/AttitudeGuidance.cs
+@@ -43,6 +43,16 @@
+             if (pitchAoaDegrees == 0) return retrograde;
+             double angle = pitchAoaDegrees * Degree;
+             return retrograde * Math.Cos(angle) + PitchUp(retrograde, up, north) * Math.Sin(angle);
++        }
++
++        internal static AttitudeVector BankedCoastPointing(AttitudeVector retrograde, AttitudeVector up,
++            AttitudeVector north, double bankDegrees, double pitchDegrees, out AttitudeVector forward)
++        {
++            AttitudeVector pitchUp = Rotate(PitchUp(retrograde, up, north), retrograde, bankDegrees * Degree);
++            double angle = pitchDegrees * Degree;
++            double sine = Math.Sin(angle), cosine = Math.Cos(angle);
++            forward = pitchUp * cosine - retrograde * sine;
++            return retrograde * cosine + pitchUp * sine;
+         }
+ 
+         internal static double PitchAoa(AttitudeVector retrograde, AttitudeVector pointing, AttitudeVector up,
+--- a/Controller/EngineGroups.cs
++++ b/Controller/EngineGroups.cs
+@@ -1,6 +1,7 @@
+ using System;
+ using System.Collections.Generic;
+ using System.Linq;
++using System.Threading;
+ 
+ namespace LandingPoc
+ {
+@@ -139,12 +140,50 @@
+         private readonly Engine[] engines;
+         private readonly EngineMount[] mounts;
+         private readonly Torque backup;
++        private readonly CancellationToken cancellation;
++        private readonly Action<long> publish;
+ 
+         internal EngineGroups(Engine[] engines, Torque backup)
++            : this(engines, backup, MeasureInstallation(engines), default, null)
++        {
++        }
++
++        private EngineGroups(Engine[] engines, Torque backup, EngineMount[] mounts,
++                             CancellationToken cancellation, Action<long> publish)
+         {
+             this.engines = engines;
+             this.backup = backup;
+-            mounts = MeasureInstallation(engines);
++            this.mounts = mounts;
++            this.cancellation = cancellation;
++            this.publish = publish;
++        }
++
++        internal EngineGroups WithMeasurements(Engine[] snapshot, Torque torque,
++                                               CancellationToken cancellation = default, Action<long> publish = null) =>
++            new EngineGroups(snapshot, torque, mounts, cancellation, publish);
++
++        internal HashSet<long> PriorityMasks(long[] families)
++        {
++            var masks = new HashSet<long>(families) { EngineModuleCatalog.All(engines.Length) };
++            int[] slots = Enumerable.Range(0, engines.Length).Where(i => engines[i].HasMount).ToArray();
++            long center = 0;
++            for (int i = 0; i < engines.Length; i++)
++            {
++                long bit = 1L << i;
++                masks.Add(bit);
++                if (engines[i].HasMount && mounts[i].RingSquared <= MountingTolerance * MountingTolerance)
++                    center |= bit;
++            }
++            foreach (int i in slots)
++            {
++                long opposite = RotationOrbit(slots, i, 2, -1, 0);
++                if (opposite == 0 || opposite == (1L << i)) continue;
++                masks.Add(opposite);
++                masks.Add(opposite | center);
++            }
++            if (center != 0) masks.Add(center);
++            masks.Remove(0);
++            return masks;
+         }
+ 
+         private static EngineMount[] MeasureInstallation(Engine[] engines)
+@@ -184,8 +223,12 @@
+             if (running != 0 && running != available) AddSymmetricGroups(result, included, running);
+             if (engines.Length <= EngineModuleCatalog.ExhaustiveLimit)
+             {
+-                for (long mask = 1; mask <= available; mask++)
+-                    if ((mask & available) == mask && included.Add(mask)) AddIfUsable(result, mask);
++                for (long mask = available; mask != 0; mask = (mask - 1) & available)
++                {
++                    cancellation.ThrowIfCancellationRequested();
++                    publish?.Invoke(mask);
++                    if (included.Add(mask)) AddIfUsable(result, mask);
++                }
+                 result.Sort((a, b) => a.Mask.CompareTo(b.Mask));
+                 return;
+             }
+@@ -198,30 +241,6 @@
+             result.Sort((a, b) => a.Mask.CompareTo(b.Mask));
+         }
+ 
+-        internal void PopulateFromMasks(List<EngineGroup> result, long available, long running, long[] editorMasks,
+-                                        List<EngineGroup> previous, params long[] preserve)
+-        {
+-            result.Clear();
+-            var included = new HashSet<long>();
+-            AddKnownGroups(result, included, available, running, editorMasks, preserve);
+-            for (int i = 0; i < engines.Length; i++)
+-            {
+-                long mask = 1L << i;
+-                if ((available & mask) != 0 && included.Add(mask)) AddIfUsable(result, mask);
+-            }
+-            if (previous == null)
+-            {
+-                AddSymmetricGroups(result, included, available);
+-                if (running != 0 && running != available) AddSymmetricGroups(result, included, running);
+-            }
+-            else
+-            {
+-                foreach (EngineGroup group in previous)
+-                    if ((group.Mask & available) == group.Mask && included.Add(group.Mask)) AddIfUsable(result, group.Mask);
+-            }
+-            result.Sort((a, b) => a.Mask.CompareTo(b.Mask));
+-        }
+-
+         private void AddKnownGroups(List<EngineGroup> result, HashSet<long> included, long available, long running,
+                                     long[] editorMasks, long[] preserve)
+         {
+@@ -232,7 +251,14 @@
+         private void AddIfUsable(List<EngineGroup> result, long mask)
+         {
+             EngineGroup group = MakeGroup(mask);
+-            if (group.Evaluate(backup)) result.Add(group);
++            if (group.Evaluate(backup)) AddCandidate(result, group);
++        }
++
++        private void AddCandidate(List<EngineGroup> result, EngineGroup group)
++        {
++            cancellation.ThrowIfCancellationRequested();
++            result.Add(group);
++            publish?.Invoke(group.Mask);
+         }
+ 
+         internal EngineGroup MakeGroup(long mask)
+@@ -249,6 +275,7 @@
+                 .Where(i => (available & (1L << i)) != 0 && engines[i].Max > 0).ToArray();
+             for (int order = 2; order <= slots.Length; order++)
+             {
++                cancellation.ThrowIfCancellationRequested();
+                 double angle = 2 * Math.PI / order;
+                 double cos = Math.Cos(angle), sin = Math.Sin(angle);
+                 var orbits = new List<EngineGroup>();
+@@ -327,6 +354,7 @@
+             var balancedOrder = Comparer<EngineGroup>.Create(EngineGroup.BalancedFirst);
+             for (int depth = 0; depth < sorted.Length; depth++)
+             {
++                cancellation.ThrowIfCancellationRequested();
+                 var next = new Dictionary<long, EngineGroup>();
+                 var usable = new List<EngineGroup>();
+                 int inside = sorted[depth];
+@@ -353,7 +381,7 @@
+                 var withCurrent = nearest.Where(g => (g.Mask & running) == running);
+                 foreach (EngineGroup group in nearest.Take(RetainedPerCount).Concat(mostThrust.Take(1))
+                     .Concat(lowFloor.Take(1)).Concat(quickStart.Take(1)).Concat(withCurrent.Take(1)).Concat(mostBalanced.Take(1)))
+-                    if (included.Add(group.Mask)) result.Add(group);
++                    if (included.Add(group.Mask)) AddCandidate(result, group);
+ 
+                 // Keep unbalanced intermediate sets so an additional engine can
+                 // cancel their moment. Search stays bounded for large clusters.
+--- /dev/null
++++ b/Controller/EngineSelection.cs
+@@ -0,0 +1,402 @@
++using System;
++using System.Collections.Concurrent;
++using System.Collections.Generic;
++using System.Linq;
++using System.Threading;
++using System.Threading.Tasks;
++using Group = LandingPoc.EngineGroup;
++
++namespace LandingPoc
++{
++    public sealed partial class Controller
++    {
++        private const double NearIgnitionSeconds = 10;
++        private const int NeighborLimit = 8;
++        private const int QuickGroupCount = 6;
++        private const int WorkerBatchSize = 8;
++
++        private readonly bool backgroundCatalog;
++        private readonly HashSet<long> priorityMasks;
++        private readonly HashSet<long> cachedMasks = new HashSet<long>();
++        private readonly Dictionary<long, Group> liveByMask = new Dictionary<long, Group>();
++        private readonly List<Group> liveGroups = new List<Group>();
++        private readonly List<Group> terminalGroups = new List<Group>();
++        private EngineGroups catalogBuilder;
++        private bool groupsDirty, catalogComplete;
++        private SearchWork catalogSearch;
++        private Engine[] completedMeasurements;
++        private long neighborOf;
++        private readonly List<long> moreEngines = new List<long>();
++        private readonly List<long> fewerEngines = new List<long>();
++        private readonly List<long> substituteEngines = new List<long>();
++
++        private sealed class SearchWork
++        {
++            internal readonly CancellationTokenSource Stop = new CancellationTokenSource();
++            internal readonly BlockingCollection<long> Masks = new BlockingCollection<long>(2 * WorkerBatchSize);
++            internal Engine[] Measurements;
++            internal Task Task;
++        }
++
++        private List<Group> groups
++        {
++            get
++            {
++                if (!groupsDirty) return liveGroups;
++                liveGroups.Clear();
++                var masks = new HashSet<long>(cachedMasks) { catalogAvailable, catalogRunning };
++                foreach (long family in editorMasks) masks.Add(family & catalogAvailable);
++                foreach (long mask in masks)
++                {
++                    if (!Subset(mask, catalogAvailable)) continue;
++                    Group group = LiveGroup(mask);
++                    if (group != null) liveGroups.Add(group);
++                }
++                liveGroups.Sort((a, b) => a.Mask.CompareTo(b.Mask));
++                terminalGroups.Clear();
++                terminalGroups.AddRange(liveGroups);
++                terminalGroups.Sort(CompareCandidateGroups);
++                groupsDirty = false;
++                return liveGroups;
++            }
++        }
++
++        private static int CompareCandidateGroups(Group a, Group b)
++        {
++            int order = CompareGroups(a, b);
++            return order == 0 ? a.Mask.CompareTo(b.Mask) : order;
++        }
++
++        private Group LiveGroup(long mask)
++        {
++            if (mask == 0) return null;
++            if (!liveByMask.TryGetValue(mask, out Group group))
++            {
++                group = catalogBuilder.MakeGroup(mask);
++                if (!group.Evaluate(backupTorque)) group = null;
++                liveByMask.Add(mask, group);
++            }
++            return group;
++        }
++
++        private IEnumerable<Group> PlanGroups(long mask, List<Group> choices, bool terminal = false)
++        {
++            if (mask != 0)
++            {
++                Group group = LiveGroup(mask);
++                if (group != null) yield return group;
++                yield break;
++            }
++            List<Group> all = choices ?? groups;
++            foreach (Group group in choices == null && terminal ? terminalGroups : all)
++                yield return group;
++        }
++
++        private void Remember(long mask)
++        {
++            groupsDirty |= cachedMasks.Add(mask);
++        }
++
++        private void UpdateGroupAvailability(Flight s)
++        {
++            long available = s.Running | s.Starting | s.Restartable;
++            if (catalogAvailable != available)
++            {
++                catalogAvailable = available;
++                catalogComplete = false;
++                CancelCatalogSearch();
++                groupsDirty = true;
++            }
++            if (catalogRunning != s.Running)
++            {
++                catalogRunning = s.Running;
++                groupsDirty = true;
++            }
++        }
++
++        private void CompleteCatalog()
++        {
++            if (catalogComplete || footprintSimulation) return;
++            CancelCatalogSearch();
++            if (specs.Length <= EngineModuleCatalog.ExhaustiveLimit)
++            {
++                for (long mask = catalogAvailable; mask != 0; mask = (mask - 1) & catalogAvailable)
++                    Remember(mask);
++            }
++            else
++            {
++                var candidates = new List<Group>();
++                catalogBuilder.Populate(candidates, catalogAvailable, catalogRunning, editorMasks, selected, emergencyGroup);
++                foreach (Group candidate in candidates) Remember(candidate.Mask);
++            }
++            catalogComplete = true;
++            completedMeasurements = specs;
++        }
++
++        private void StartCatalogSearch()
++        {
++            if (!backgroundCatalog || catalogSearch != null || catalogComplete) return;
++            var work = new SearchWork { Measurements = specs };
++            var published = new HashSet<long>(cachedMasks)
++            {
++                catalogAvailable, catalogRunning
++            };
++            long available = catalogAvailable;
++            long running = catalogRunning;
++            CancellationToken token = work.Stop.Token;
++            Engine[] snapshot = (Engine[])specs.Clone();
++            EngineGroups builder = catalogBuilder.WithMeasurements(snapshot, backupTorque, token, mask =>
++            {
++                if (published.Add(mask)) work.Masks.Add(mask, token);
++            });
++            // The worker only sees immutable measurements and installation geometry.
++            long preferred = selected;
++            work.Task = Task.Run(() => builder.Populate(new List<Group>(), available, running, editorMasks, preferred), token);
++            catalogSearch = work;
++        }
++
++        private List<long> AcceptCatalogBatch()
++        {
++            SearchWork work = catalogSearch;
++            if (work == null) return null;
++            List<long> added = null;
++            for (int i = 0; i < WorkerBatchSize && work.Masks.TryTake(out long mask); i++)
++            {
++                Remember(mask);
++                if (LiveGroup(mask) == null) continue;
++                if (added == null) added = new List<long>(WorkerBatchSize);
++                added.Add(mask);
++            }
++            if (work.Task.IsCompleted && work.Masks.Count == 0)
++            {
++                catalogComplete = work.Task.Status == TaskStatus.RanToCompletion;
++                if (catalogComplete) completedMeasurements = work.Measurements;
++                CancelCatalogSearch();
++            }
++            return added;
++        }
++
++        internal void CancelCatalogSearch()
++        {
++            SearchWork work = catalogSearch;
++            if (work == null) return;
++            catalogSearch = null;
++            work.Stop.Cancel();
++            work.Task.ContinueWith(completed =>
++            {
++                _ = completed.Exception;
++                work.Masks.Dispose();
++                work.Stop.Dispose();
++            }, TaskScheduler.Default);
++        }
++
++        private void PrepareNeighbors(long active)
++        {
++            if (active == 0 || active == neighborOf) return;
++            neighborOf = active;
++            var masks = new HashSet<long>(priorityMasks);
++            masks.UnionWith(cachedMasks);
++            foreach (long geometry in priorityMasks)
++            {
++                masks.Add(active | geometry);
++                masks.Add(active & ~geometry);
++            }
++            var order = Comparer<Group>.Create(CompareCandidateGroups);
++            Group[] candidates = masks.Where(mask => mask != active && Subset(mask, catalogAvailable))
++                .Select(LiveGroup).Where(group => group != null).ToArray();
++
++            moreEngines.Clear();
++            moreEngines.AddRange(candidates.Where(g => Subset(active, g.Mask)).OrderBy(g => g.Count)
++                .ThenBy(g => g, order).Take(NeighborLimit).Select(g => g.Mask));
++            fewerEngines.Clear();
++            fewerEngines.AddRange(candidates.Where(g => Subset(g.Mask, active)).OrderBy(g => g, order)
++                .Take(NeighborLimit).Select(g => g.Mask));
++            substituteEngines.Clear();
++            substituteEngines.AddRange(candidates.Where(g => !Subset(g.Mask, active) && !Subset(active, g.Mask))
++                .OrderBy(g => ChangedEngines(g.Mask ^ active)).ThenBy(g => g, order)
++                .Take(NeighborLimit).Select(g => g.Mask));
++        }
++
++        private static int ChangedEngines(long mask)
++        {
++            int count = 0;
++            for (; mask != 0; mask &= mask - 1) count++;
++            return count;
++        }
++
++        private IEnumerable<Group> TryFirst(long preferred)
++        {
++            Group group = LiveGroup(preferred);
++            if (group != null) yield return group;
++            foreach (Group alternative in groups)
++                if (alternative.Mask != preferred) yield return alternative;
++        }
++
++        private IEnumerable<Group> TryFirst(List<long> preferred)
++        {
++            if (preferred != null)
++            {
++                foreach (long mask in preferred)
++                {
++                    Group cached = LiveGroup(mask);
++                    if (cached != null) yield return cached;
++                }
++                CompleteCatalog();
++            }
++            foreach (Group candidate in groups)
++                if (preferred == null || !preferred.Contains(candidate.Mask)) yield return candidate;
++        }
++
++        internal bool CoastIgnitionImminent(double now)
++        {
++            if (phase != Phase.Coast || !coastSearch.HasValue) return false;
++            CoastSearch saved = coastSearch.Value;
++            return saved.Plan.Main != null && !cfg.IgnitionAltitudeBlocked(saved.Flight.Height) &&
++                saved.Plan.Wait - (now - saved.Flight.UniversalTime.Value) <= 2.5 * cfg.SampleSeconds;
++        }
++
++        private Plan FindCoastPlan(Flight s, bool ignitionBlocked)
++        {
++            List<long> newCandidates = AcceptCatalogBatch();
++            if (coastSearch.HasValue && SameCoastSettings(coastSearch.Value) && s.UniversalTime.HasValue &&
++                newCandidates == null && (s.Running | s.Starting | s.IssuedStarts) == 0)
++            {
++                CoastSearch saved = coastSearch.Value;
++                Flight before = saved.Flight;
++                double elapsed = s.UniversalTime.Value - before.UniversalTime.Value;
++                double wait = saved.Plan.Wait - elapsed;
++                double interval = saved.Plan.Main == null || wait <= NearIgnitionSeconds ? 0.5 : 1;
++                bool atIgnition = !ignitionBlocked && saved.Plan.Main != null && wait <= cfg.SampleSeconds * 1.5;
++                if (elapsed >= 0 && elapsed < interval && !atIgnition &&
++                    cfg.IgnitionAltitudeBlocked(before.Height) == ignitionBlocked &&
++                    before.Restartable == s.Restartable && before.Unsettled == s.Unsettled &&
++                    (before.Vz < 0) == (s.Vz < 0))
++                {
++                    Plan retained = saved.Plan;
++                    retained.Wait = Math.Max(0, wait);
++                    cappedPlanMargin = saved.Margin;
++                    propellantShortfall = saved.Shortfall;
++                    return retained;
++                }
++            }
++
++            Plan next = plan.Main == null ? default : RecheckCoastPair(s, plan);
++            if (next.Main == null && plan.Main != null)
++            {
++                next = FindCachedCoastPair(s, plan);
++                if (specs.Length > EngineModuleCatalog.ExhaustiveLimit && completedMeasurements != specs)
++                    catalogComplete = false;
++            }
++            if (next.Main == null)
++            {
++                if (!backgroundCatalog || catalogComplete)
++                {
++                    CompleteCatalog();
++                    next = FindPlan(s);
++                }
++                else
++                {
++                    StartCatalogSearch();
++                    List<Group> quick = QuickCoastGroups(s, newCandidates);
++                    next = FindPlan(s, choices: quick);
++                    // Preserve the last safe decision window even if the worker is delayed.
++                    if (next.Main == null && !ignitionBlocked && !MayWaitForCatalog(s))
++                    {
++                        CompleteCatalog();
++                        next = FindPlan(s);
++                    }
++                }
++            }
++            if (ignitionBlocked && next.Main == null && catalogComplete) FindLaterAeroLanding(s, ref next);
++
++            if (next.Main != null)
++            {
++                Remember(next.Main.Mask);
++                Remember(next.Final.Mask);
++                PrepareNeighbors(next.Main.Mask);
++                CancelCatalogSearch();
++            }
++            RecordCoastCheck(s, next);
++            return next;
++        }
++
++        private void RecordCoastCheck(Flight s, Plan checkedPlan)
++        {
++            coastSearch = s.UniversalTime.HasValue ? new CoastSearch {
++                Flight = s, Plan = checkedPlan, MaxG = cfg.MaxG, Altitude = cfg.MaxIgnitionAltitude,
++                Precision = cfg.PrecisionSeconds, Optimize = cfg.OptimizeFuel, Margin = cappedPlanMargin,
++                Shortfall = propellantShortfall
++            } : (CoastSearch?)null;
++        }
++
++        private bool MayWaitForCatalog(Flight s)
++        {
++            // Use the best theoretical capped deceleration as a deadline,
++            // then leave time for a measured start and a terminal handoff.
++            double spool = 0;
++            for (int i = 0; i < specs.Length; i++)
++                if ((s.Restartable & (1L << i)) != 0 && EngineResponse.Known(specs[i].SpoolSeconds))
++                    spool = Math.Max(spool, specs[i].SpoolSeconds);
++            double delay = Math.Max(cfg.PrecisionSeconds, cfg.AttitudeResponseSeconds);
++            return CoastMargin(s, delay + spool + s.AlignmentSeconds + s.UllageSeconds,
++                cfg.MaxG * Settings.G0, 0, cfg.TouchSpeed) > 0;
++        }
++
++        private List<Group> QuickCoastGroups(Flight s, List<long> discovered)
++        {
++            var order = Comparer<Group>.Create(CompareCandidateGroups);
++            List<Group> viable = groups.Where(group => Eligible(group, s) &&
++                group.Min <= PlanningLimit(group, s, Settings.InitialPlanningThrottle) &&
++                PlanningLimit(group, s, Settings.InitialPlanningThrottle) > s.Mass * cfg.Gravity).ToList();
++            var final = viable.OrderBy(g => g, order).Take(QuickGroupCount);
++            var main = viable.OrderByDescending(g => PlanningLimit(g, s, Settings.InitialPlanningThrottle))
++                .ThenBy(g => !g.CenteredInstallation).ThenBy(g => g, order).Take(QuickGroupCount);
++            IEnumerable<Group> shortlist = final.Concat(main);
++            if (discovered != null)
++                shortlist = shortlist.Concat(discovered.Select(LiveGroup).Where(group => group != null && Eligible(group, s)));
++            return shortlist.Distinct().OrderBy(g => g, order).ToList();
++        }
++
++        private Plan RecheckCoastPair(Flight s, Plan prior)
++        {
++            Plan next = ReplanCoastPair(s, prior);
++            Group main = LiveGroup(prior.Main.Mask);
++            Group final = LiveGroup(prior.Final.Mask);
++            if (next.Main != null || main == null || final == null || !Eligible(main, s) || !Eligible(final, s))
++                return next;
++            // The same bank may still fly a different handoff when the
++            // original terminal duration or throttle has become infeasible.
++            foreach (double factor in TerminalDurationFactors)
++            {
++                Plan recipe = prior;
++                recipe.RequestedTerminalSeconds = cfg.PrecisionSeconds;
++                recipe.TerminalSeconds = cfg.PrecisionSeconds * factor;
++                if (recipe.TerminalSeconds == prior.TerminalSeconds) continue;
++                next = ReplanCoastPair(s, recipe);
++                if (next.Main != null) return next;
++            }
++            return next;
++        }
++
++        private Plan FindCachedCoastPair(Flight s, Plan prior)
++        {
++            PrepareNeighbors(prior.Main.Mask);
++            foreach (long mask in substituteEngines.Concat(moreEngines).Concat(fewerEngines))
++            {
++                Group bank = LiveGroup(mask);
++                if (bank == null || !Eligible(bank, s)) continue;
++                Plan next = prior;
++                next.Main = bank;
++                if (!Subset(next.Final.Mask, mask))
++                {
++                    next.Final = groups.FirstOrDefault(group => group.Count == prior.Final.Count &&
++                        Subset(group.Mask, mask) && Eligible(group, s));
++                    if (next.Final == null) continue;
++                }
++                next = ReplanCoastPair(s, next);
++                if (next.Main != null) return next;
++            }
++            return default;
++        }
++    }
++}
+--- /dev/null
++++ b/Controller/FootprintGeometry.cs
+@@ -0,0 +1,52 @@
++using System;
++
++namespace LandingPoc
++{
++    internal static class FootprintGeometry
++    {
++        private const double Degree = Math.PI / 180;
++
++        internal static void Destination(double latitude, double longitude, double north, double east, double radius,
++                                         out double resultLatitude, out double resultLongitude)
++        {
++            double angle = Controller.Norm(north, east) / radius;
++            double bearing = Math.Atan2(east, north);
++            double lat = latitude * Degree;
++            double sine = Math.Sin(lat) * Math.Cos(angle) + Math.Cos(lat) * Math.Sin(angle) * Math.Cos(bearing);
++            resultLatitude = Math.Asin(Math.Max(-1, Math.Min(1, sine))) / Degree;
++            resultLongitude = longitude + Math.Atan2(Math.Sin(bearing) * Math.Sin(angle) * Math.Cos(lat),
++                Math.Cos(angle) - Math.Sin(lat) * sine) / Degree;
++            resultLongitude = (resultLongitude % 360 + 540) % 360 - 180;
++        }
++
++        internal static void Deviation(double waypointLat, double waypointLon, double touchdownLat,
++                                       double touchdownLon, double radius, out double distance, out double bearing,
++                                       out double eastOffset, out double northOffset)
++        {
++            double start = waypointLat * Degree;
++            double end = touchdownLat * Degree;
++            double deltaLongitude = (touchdownLon - waypointLon) * Degree;
++            double halfLatitude = Math.Sin((end - start) / 2);
++            double halfLongitude = Math.Sin(deltaLongitude / 2);
++            double cosStart = Math.Cos(start), cosEnd = Math.Cos(end);
++            double h = halfLatitude * halfLatitude + cosStart * cosEnd * halfLongitude * halfLongitude;
++            distance = 2 * radius * Math.Asin(Math.Sqrt(Math.Max(0, Math.Min(1, h))));
++
++            double east = Math.Sin(deltaLongitude) * cosEnd;
++            double north = cosStart * Math.Sin(end) - Math.Sin(start) * cosEnd * Math.Cos(deltaLongitude);
++            // Coincident or antipodal points have no unique bearing. At a
++            // polar waypoint there is no local true-north reference.
++            double length = Controller.Norm(north, east);
++            if (length < 1e-12 || Math.Abs(cosStart) < 1e-12)
++            {
++                bearing = double.NaN;
++                eastOffset = northOffset = distance < 1e-5 ? 0 : double.NaN;
++                return;
++            }
++            double meters = distance / length;
++            eastOffset = east * meters;
++            northOffset = north * meters;
++            bearing = (Math.Atan2(east, north) / Degree + 360) % 360;
++        }
++    }
++}
+--- a/Controller/LandingController.cs
++++ b/Controller/LandingController.cs
+@@ -1,12 +1,11 @@
+ using System;
+ using System.Collections.Generic;
+-using System.Threading.Tasks;
+ using Group = LandingPoc.EngineGroup;
+ 
+ namespace LandingPoc
+ {
+     // Planar KSP test model. Use t, kN, m and seconds throughout.
+-    public enum Phase { Coast, Main, Final, Recoast, Yolo, Landed, EntryBurn }
++    public enum Phase { Coast, Main, Final, Recoast, Yolo, Landed, EntryBurn, Boostback }
+ 
+     public sealed class Engine
+     {
+@@ -23,6 +22,10 @@
+         {
+         }
+ 
++        internal Engine WithIgnitions(int remaining) =>
++            new Engine(X, Y, Min, Max, remaining, SpoolSeconds, StopAllowed, Gimbal, Moment, Authority,
++                QuantifiedControl ? (Torque?)Axis : null, SpecificImpulse, HasMount);
++
+         internal Engine(double x, double y, double min, double max, int ignitions, double spoolSeconds,
+                         bool stopAllowed, bool gimbal, Torque moment, Torque authority, Torque? axis = null,
+                         double specificImpulse = 0, bool hasMount = true)
+@@ -45,7 +48,20 @@
+         public const double IgnitionToleranceDegrees = 10;
+         public const double TerminalTurnBraking = 0.11;
+         public double MaxG = 4;
++        public double BoostbackMaxG = double.NaN, EntryMaxG = double.NaN;
++        public double BoostbackStartAoa = 110, BoostbackFineDistance = 15000;
++
++        internal double ThrustLimitFor(Phase phase)
++        {
++            if (phase == Phase.Boostback && !double.IsNaN(BoostbackMaxG)) return BoostbackMaxG;
++            if (phase == Phase.EntryBurn && !double.IsNaN(EntryMaxG)) return EntryMaxG;
++            return MaxG;
++        }
+         public double CoastPitchAoaDegrees;
++        public double VesselTargetEastOffset, VesselTargetNorthOffset;
++        public double CoastPitchAoaMinimum = double.NaN, CoastPitchAoaMaximum = double.NaN;
++        internal double MinimumCoastPitch => double.IsNaN(CoastPitchAoaMinimum) ? CoastPitchAoaDegrees : CoastPitchAoaMinimum;
++        internal double MaximumCoastPitch => double.IsNaN(CoastPitchAoaMaximum) ? CoastPitchAoaDegrees : CoastPitchAoaMaximum;
+         public double MaxIgnitionAltitude = 8000;
+         public double EntryBurnAltitude = 65000;
+         public double EntryBurnSpeed = 1300;
+@@ -59,6 +75,8 @@
+         public double GearSpeedLimit = 70;
+         public double GearCommandAdvanceSeconds;
+         public bool OptimizeFuel;
++
++        internal Settings Copy() => (Settings)MemberwiseClone();
+ 
+         internal bool IgnitionAltitudeBlocked(double clearance)
+         {
+@@ -106,6 +124,8 @@
+         public long Engines;
+         public double X, Up, IgnitionLead;
+         public double IgnitionAlignmentSeconds;
++        internal double BoostbackIgnitionAngle;
++        internal bool PrepareBoostbackUllage;
+         public bool DeployGear, Emergency, VerticalOnly;
+         public string Reason;
+         public string YoloTrigger;
+@@ -122,7 +142,7 @@
+         internal bool FuelPlanSelected;
+     }
+ 
+-    public sealed class Controller
++    public sealed partial class Controller
+     {
+         public const int MaxMonitoredEngines = EngineModuleCatalog.Capacity;
+ 
+@@ -144,7 +164,6 @@
+             internal Flight Flight;
+             internal Plan Plan;
+             internal double MaxG, Altitude, Precision, Margin, Shortfall;
+-            internal int CatalogRevision, CandidateRevision;
+             internal bool Optimize;
+         }
+ 
+@@ -175,7 +194,6 @@
+         }
+ 
+         private readonly Settings cfg;
+-        private readonly List<Group> groups = new List<Group>();
+         private readonly List<MainSearchCandidate> mainSearchCandidates = new List<MainSearchCandidate>();
+         private readonly Dictionary<IgnitionProfile, IgnitionWindow> ignitionWindows =
+             new Dictionary<IgnitionProfile, IgnitionWindow>();
+@@ -192,7 +210,6 @@
+         private long selected;
+         private Plan plan;
+         private CoastSearch? coastSearch;
+-        private int catalogRevision, candidateRevision;
+         private bool emergency, verticalOnly, usedAlignmentRelight;
+         internal bool CappedFinalCommitted { get; set; }
+         private string yoloTrigger;
+@@ -214,7 +231,6 @@
+         private static readonly double[] FuelDurationFactors = { 0.65, 0.8, 1, 1.2 };
+         private static readonly double[] FuelTerminalThrottles = { 0.5, 0.75, 0.875 };
+         private const double FuelComparisonLookahead = 4;
+-        private const double CoastSearchInterval = 0.3;
+ 
+         public Controller(Engine[] engines, Settings settings)
+             : this(engines, settings, new Torque(), null)
+@@ -231,12 +247,37 @@
+         {
+             if (engines.Length > MaxMonitoredEngines) throw new ArgumentOutOfRangeException("engines");
+             cfg = settings;
+-            this.backgroundCatalog = backgroundCatalog && engines.Length > EngineModuleCatalog.ExhaustiveLimit;
++            this.backgroundCatalog = backgroundCatalog;
+             for (int i = 0; i < engines.Length; i++)
+                 if (!engines[i].StopAllowed) fixedEngines |= 1L << i;
+             catalogAvailable = EngineModuleCatalog.All(engines.Length);
+             editorMasks = EngineModuleCatalog.EditorFamilyMasks(engines.Length, families);
++            catalogBuilder = new EngineGroups(engines, backup);
++            priorityMasks = catalogBuilder.PriorityMasks(editorMasks);
++            cachedMasks.UnionWith(priorityMasks);
+             RefreshThrust(engines, backup);
++        }
++
++        internal Engine[] CaptureEngineMeasurements() => (Engine[])specs.Clone();
++
++        internal bool CanUseBoostbackBank(long mask, Flight flight, out double acceleration)
++        {
++            acceleration = 0;
++            Group bank = LiveGroup(mask);
++            if (bank == null || !Eligible(bank, flight) || (mask & fixedEngines) != 0 ||
++                double.IsPositiveInfinity(EngineStartDelay(mask, flight))) return false;
++            double limit = Limit(bank, flight, true, Phase.Boostback);
++            if (limit < MinimumRunningThrust(bank) || limit <= 0) return false;
++            acceleration = limit / flight.Mass;
++            return true;
++        }
++
++        internal double BoostbackSpoolSeconds(long mask, Flight flight) => EngineStartDelay(mask, flight);
++
++        internal void ObserveBoostbackAltitude(double altitude)
++        {
++            // Retain an above-entry sample until the first normal guidance tick.
++            if (altitude > cfg.EntryBurnAltitude) previousEntryAltitude = altitude;
+         }
+ 
+         // The caller preserves engine indexes for the life of a flight.
+@@ -249,107 +290,9 @@
+         {
+             specs = engines;
+             backupTorque = backup;
+-            RebuildGroups();
+-        }
+-
+-        private readonly List<Group> terminalPlanGroups = new List<Group>();
+-        private HashSet<long> catalogMasks = new HashSet<long>();
+-        private HashSet<long> nextCatalogMasks = new HashSet<long>();
+-        private readonly bool backgroundCatalog;
+-        private List<Group> completeCatalog;
+-        private Task<List<Group>> catalogWork;
+-        private Engine[] catalogWorkSpecs;
+-        private long catalogWorkAvailable, catalogWorkRunning;
+-
+-        private long[] PreservedGroups() => new[] { selected, emergencyGroup,
+-            plan.Main == null ? 0 : plan.Main.Mask, plan.Final == null ? 0 : plan.Final.Mask };
+-
+-        private void RebuildGroups(bool immediate = false)
+-        {
+-            var builder = new EngineGroups(specs, backupTorque);
+-            long[] preserve = PreservedGroups();
+-            if (backgroundCatalog && !immediate)
+-            {
+-                builder.PopulateFromMasks(groups, catalogAvailable, catalogRunning, editorMasks, completeCatalog, preserve);
+-                StartCatalog();
+-            }
+-            else
+-            {
+-                builder.Populate(groups, catalogAvailable, catalogRunning, editorMasks, preserve);
+-                if (backgroundCatalog) completeCatalog = new List<Group>(groups);
+-            }
+-            OrderTerminalPlanGroups();
+-        }
+-
+-        private void StartCatalog()
+-        {
+-            if (catalogWork != null) return;
+-            Engine[] snapshot = catalogWorkSpecs = specs;
+-            long available = catalogWorkAvailable = catalogAvailable;
+-            long running = catalogWorkRunning = catalogRunning;
+-            Torque torque = backupTorque;
+-            long[] preserve = PreservedGroups();
+-            long[] families = editorMasks;
+-            // Only immutable engine measurements enter this worker. Vessel
+-            // state and KSP/FAR APIs stay on the main thread.
+-            catalogWork = Task.Run(() =>
+-            {
+-                var result = new List<Group>();
+-                new EngineGroups(snapshot, torque).Populate(result, available, running, families, preserve);
+-                return result;
+-            });
+-        }
+-
+-        private void ReadCatalog()
+-        {
+-            if (catalogWork == null || !catalogWork.IsCompleted) return;
+-            Task<List<Group>> completed = catalogWork;
+-            catalogWork = null;
+-            if (completed.Status != TaskStatus.RanToCompletion)
+-            {
+-                _ = completed.Exception;
+-                return;
+-            }
+-            completeCatalog = completed.Result;
+-            var builder = new EngineGroups(specs, backupTorque);
+-            builder.PopulateFromMasks(groups, catalogAvailable, catalogRunning, editorMasks, completeCatalog, PreservedGroups());
+-            OrderTerminalPlanGroups();
+-            if (catalogWorkSpecs != specs || catalogWorkAvailable != catalogAvailable || catalogWorkRunning != catalogRunning)
+-                StartCatalog();
+-        }
+-
+-        private void OrderTerminalPlanGroups()
+-        {
+-            catalogRevision++;
+-            bool expanded = false;
+-            nextCatalogMasks.Clear();
+-            foreach (Group group in groups)
+-            {
+-                nextCatalogMasks.Add(group.Mask);
+-                expanded |= !catalogMasks.Contains(group.Mask);
+-            }
+-            if (expanded) candidateRevision++;
+-            HashSet<long> previousMasks = catalogMasks;
+-            catalogMasks = nextCatalogMasks;
+-            nextCatalogMasks = previousMasks;
+-            terminalPlanGroups.Clear();
+-            terminalPlanGroups.AddRange(groups);
+-            terminalPlanGroups.Sort((a, b) =>
+-            {
+-                int comparison = CompareGroups(a, b);
+-                return comparison == 0 ? a.Mask.CompareTo(b.Mask) : comparison;
+-            });
+-        }
+-
+-        private void UpdateGroups(Flight s)
+-        {
+-            if (specs.Length <= EngineModuleCatalog.ExhaustiveLimit) return;
+-            if (backgroundCatalog) ReadCatalog();
+-            long available = s.Running | s.Starting | s.Restartable;
+-            if (available == catalogAvailable && s.Running == catalogRunning) return;
+-            catalogAvailable = available;
+-            catalogRunning = s.Running;
+-            RebuildGroups();
++            catalogBuilder = catalogBuilder.WithMeasurements(engines, backup);
++            liveByMask.Clear();
++            groupsDirty = true;
+         }
+ 
+         private static bool Subset(long subset, long all) { return (subset & all) == subset; }
+@@ -398,9 +341,9 @@
+             return Subset(group.Mask, available) && Subset(fixedEngines & s.Running, group.Mask);
+         }
+ 
+-        private double Limit(Group group, Flight s, bool capped)
+-        {
+-            return capped ? Math.Min(group.Max, cfg.MaxG * Settings.G0 * s.Mass) : group.Max;
++        private double Limit(Group group, Flight s, bool capped, Phase burn = Phase.Main)
++        {
++            return capped ? Math.Min(group.Max, cfg.ThrustLimitFor(burn) * Settings.G0 * s.Mass) : group.Max;
+         }
+ 
+         private double PlanningLimit(Group group, Flight s, double throttle)
+@@ -516,7 +459,7 @@
+         }
+ 
+         private Plan FindPlan(Flight s, long activeMainMask = 0,
+-                              double planningThrottle = Settings.InitialPlanningThrottle, bool igniteNow = false)
++                              double planningThrottle = Settings.InitialPlanningThrottle, bool igniteNow = false, List<Group> choices = null)
+         {
+             // Use the configured terminal estimate first. The solver may
+             // move the handoff in either direction to find a continuous burn.
+@@ -525,7 +468,7 @@
+             if (alreadyPowered) planningThrottle = 1;
+             int smallestCount = int.MaxValue;
+             double strongest = 0;
+-            foreach (Group group in groups)
++            foreach (Group group in choices ?? groups)
+                 if (Eligible(group, s) && (!alreadyPowered || Subset(group.Mask, s.Running)) &&
+                     PlanningLimit(group, s, planningThrottle) > s.Mass * cfg.Gravity && group.Min <= Limit(group, s, true))
+                 {
+@@ -537,12 +480,12 @@
+             {
+                 int maxCount = best.Final == null ? int.MaxValue : best.Final.Count;
+                 double seconds = cfg.PrecisionSeconds * factor;
+-                Plan candidate = FindPlan(s, activeMainMask, seconds, maxCount, 0.5, planningThrottle, igniteNow);
++                Plan candidate = FindPlan(s, activeMainMask, seconds, maxCount, 0.5, planningThrottle, igniteNow, choices: choices);
+                 if (candidate.Main == null && (alreadyPowered || factor == 1))
+                 {
+                     foreach (double throttle in AlternativeTerminalThrottle)
+                     {
+-                        candidate = FindPlan(s, activeMainMask, seconds, maxCount, throttle, planningThrottle, igniteNow);
++                        candidate = FindPlan(s, activeMainMask, seconds, maxCount, throttle, planningThrottle, igniteNow, choices: choices);
+                         if (candidate.Main != null) break;
+                     }
+                 }
+@@ -563,7 +506,7 @@
+                 double seconds = Math.Max(cfg.PrecisionSeconds, TravelTime(s, 0, cfg.TouchSpeed));
+                 foreach (double throttle in AlternativeTerminalThrottle)
+                 {
+-                    best = FindPlan(s, activeMainMask, seconds, int.MaxValue, throttle, planningThrottle, igniteNow);
++                    best = FindPlan(s, activeMainMask, seconds, int.MaxValue, throttle, planningThrottle, igniteNow, choices: choices);
+                     if (best.Main != null) break;
+                 }
+             }
+@@ -629,10 +572,10 @@
+ 
+         private Plan FindPlan(Flight s, long activeMainMask, double terminalSeconds, int maxCount,
+                               double terminalThrottle, double planningThrottle, bool igniteNow,
+-                              long mainMask = 0, long finalMask = 0)
++                              long mainMask = 0, long finalMask = 0, List<Group> choices = null)
+         {
+             Plan best = SearchPlan(s, activeMainMask, terminalSeconds, maxCount, terminalThrottle, planningThrottle,
+-                igniteNow, mainMask, finalMask);
++                igniteNow, mainMask, finalMask, choices: choices);
+             if (best.Main == null) return best;
+ 
+             // Re-solve the same pair after integrating its main-burn fuel.
+@@ -659,7 +602,7 @@
+ 
+         private Plan SearchPlan(Flight s, long activeMainMask, double terminalSeconds, int maxCount,
+                                 double terminalThrottle, double planningThrottle, bool igniteNow,
+-                                long mainMask, long finalMask, double joinMass = 0)
++                                long mainMask, long finalMask, double joinMass = 0, List<Group> choices = null)
+         {
+             Plan best = new Plan();
+             bool alreadyPowered = activeMainMask != 0;
+@@ -687,7 +630,7 @@
+             if (altitudeWait > forecastEnd) return best;
+ 
+             mainSearchCandidates.Clear();
+-            foreach (Group first in groups)
++            foreach (Group first in PlanGroups(mainMask, choices))
+             {
+                 if ((mainMask != 0 && first.Mask != mainMask) ||
+                     (alreadyPowered && first.Mask != activeMainMask) || !Eligible(first, s)) continue;
+@@ -703,7 +646,7 @@
+             if (mainSearchCandidates.Count == 0) return best;
+ 
+             double cachedJoinSpeed = double.NaN;
+-            foreach (Group last in terminalPlanGroups)
++            foreach (Group last in PlanGroups(finalMask, choices, terminal: true))
+             {
+                 if (last.Count > maxCount || (best.Final != null && CompareGroups(last, best.Final) > 0)) break;
+                 if ((finalMask != 0 && last.Mask != finalMask) || !Eligible(last, s)) continue;
+@@ -1024,60 +967,13 @@
+ 
+         private Plan ReplanCoastPair(Flight s, Plan pair, bool igniteNow = false)
+         {
+-            Plan result = FindPlan(s, 0, pair.TerminalSeconds, pair.Final.Count, pair.TerminalThrottleFraction,
++            double seconds = pair.RequestedTerminalSeconds == cfg.PrecisionSeconds
++                ? pair.TerminalSeconds : cfg.PrecisionSeconds;
++            Plan result = FindPlan(s, 0, seconds, pair.Final.Count, pair.TerminalThrottleFraction,
+                 Settings.InitialPlanningThrottle, igniteNow, pair.Main.Mask, pair.Final.Mask);
+             result.RequestedTerminalSeconds = cfg.PrecisionSeconds;
+             result.FuelOptimized = pair.FuelOptimized;
+             return result;
+-        }
+-
+-        private Plan FindCoastPlan(Flight s, bool ignitionBlocked)
+-        {
+-            bool sameSettings = coastSearch.HasValue && SameCoastSettings(coastSearch.Value);
+-            if (sameSettings && s.UniversalTime.HasValue && (s.Running | s.Starting | s.IssuedStarts) == 0)
+-            {
+-                CoastSearch saved = coastSearch.Value;
+-                Flight before = saved.Flight;
+-                double elapsed = s.UniversalTime.Value - before.UniversalTime.Value;
+-                double wait = saved.Plan.Wait - elapsed;
+-                // Reuse during an enforced coast or while the selected burn
+-                // is still well away. The ignition gate always uses live data.
+-                if (elapsed >= 0 && elapsed < CoastSearchInterval &&
+-                    (ignitionBlocked || (saved.Plan.Main != null && wait > CoastSearchInterval)) &&
+-                    cfg.IgnitionAltitudeBlocked(before.Height) == ignitionBlocked &&
+-                    saved.CatalogRevision == catalogRevision && before.Restartable == s.Restartable &&
+-                    before.Unsettled == s.Unsettled && ReferenceEquals(before.AeroForecast, s.AeroForecast) &&
+-                    Math.Abs(before.Mass - s.Mass) <= 0.005 * s.Mass &&
+-                    Math.Abs(before.AlignmentSeconds - s.AlignmentSeconds) <= CoastSearchInterval &&
+-                    (before.Vz < 0) == (s.Vz < 0))
+-                {
+-                    Flight expected = Coast(before, elapsed);
+-                    if (Math.Abs(s.Height - expected.Height) <= Math.Max(5, 0.005 * s.Height) &&
+-                        Norm(s.Vx - expected.Vx, s.Vz - expected.Vz) <= 5)
+-                    {
+-                        Plan retained = saved.Plan;
+-                        retained.Wait = Math.Max(0, wait);
+-                        cappedPlanMargin = saved.Margin;
+-                        propellantShortfall = saved.Shortfall;
+-                        return retained;
+-                    }
+-                }
+-            }
+-
+-            // Recheck the selected pair with current thrust, fuel and
+-            // trajectory before considering different engines.
+-            bool newChoice = sameSettings && (coastSearch.Value.CandidateRevision != candidateRevision ||
+-                (s.Restartable & ~coastSearch.Value.Flight.Restartable) != 0);
+-            Plan next = sameSettings && !newChoice && plan.Main != null ? ReplanCoastPair(s, plan) : default;
+-            if (next.Main == null) next = FindPlan(s);
+-            if (ignitionBlocked && next.Main == null) FindLaterAeroLanding(s, ref next);
+-
+-            coastSearch = s.UniversalTime.HasValue ? new CoastSearch {
+-                Flight = s, Plan = next, CatalogRevision = catalogRevision, CandidateRevision = candidateRevision, MaxG = cfg.MaxG,
+-                Altitude = cfg.MaxIgnitionAltitude, Precision = cfg.PrecisionSeconds, Optimize = cfg.OptimizeFuel,
+-                Margin = cappedPlanMargin, Shortfall = propellantShortfall
+-            } : (CoastSearch?)null;
+-            return next;
+         }
+ 
+         private bool CappedBrakeFitsAfter(Flight s, double wait)
+@@ -1095,6 +991,7 @@
+ 
+         private Plan FindRelight(Flight s, int fewerThan = int.MaxValue, double shutdownLead = 0)
+         {
++            CompleteCatalog();
+             Plan best = new Plan();
+             double extra = Math.Max(0, s.Vz / cfg.Gravity);
+             double coastToGround = (s.Vz + Math.Sqrt(s.Vz * s.Vz + 2 * cfg.Gravity * s.Height)) / cfg.Gravity;
+@@ -1478,7 +1375,7 @@
+             // room to steer. Otherwise require authority at the current tilt.
+             double projectedTilt = remaining > 2 * s.TerminalAlignmentSeconds
+                 ? Math.Max(requiredTilt, (s.UprightAngle + requiredTilt) / 2) : s.UprightAngle;
+-            foreach (Group group in groups)
++            foreach (Group group in TryFirst(preferredMask))
+             {
+                 if (group.Count > maxCount || !Subset(group.Mask, s.Running) || !Eligible(group, s)) continue;
+                 double limit = Limit(group, s, capped);
+@@ -1509,7 +1406,7 @@
+             double duration = TravelTime(s, target.JoinHeight, target.JoinSpeed);
+             double accel = Norm(x, up);
+             double joinMass = MassAfter(s.Mass, accel, duration, running);
+-            Group terminal = groups.Find(g => g.Mask == target.Final.Mask);
++            Group terminal = LiveGroup(target.Final.Mask);
+             double terminalAccel = cfg.Gravity + (target.JoinSpeed - cfg.TouchSpeed) / target.TerminalSeconds;
+             return accel * s.Mass <= Limit(running, s, cappedMain) * 1.005 && accel * joinMass >= running.Min &&
+                    terminal != null && Eligible(terminal, s) &&
+@@ -1561,7 +1458,8 @@
+                 best = FindFineMainTrajectory(s, running, true);
+                 if (best.Main != null) return best;
+             }
+-            foreach (Group alternative in groups)
++            PrepareNeighbors(running.Mask);
++            foreach (Group alternative in TryFirst(fewerEngines))
+             {
+                 if (alternative.Mask == running.Mask || !Subset(alternative.Mask, running.Mask & s.Running) ||
+                     !Eligible(alternative, s) || (fixedEngines & (running.Mask ^ alternative.Mask)) != 0 ||
+@@ -1574,6 +1472,7 @@
+                     !MainVector(ThrustAfterDownselect(s, running, alternative), candidate.JoinHeight, candidate.JoinSpeed,
+                         out x, out up, alternative.Mask != candidate.Final.Mask, candidate.FadeMainLift) ||
+                     !TerminalVerticalAuthority(s, alternative, up + s.ExternalUpAcceleration)) continue;
++                if (fewerEngines.Contains(alternative.Mask)) return candidate;
+                 if (best.Main == null || candidate.Main.Count > best.Main.Count ||
+                     (candidate.Main.Count == best.Main.Count && ComparePlanGroups(candidate, best) < 0))
+                     best = candidate;
+@@ -1724,7 +1623,7 @@
+                 reason += " (horizontal target not reached)";
+             if ((phase == Phase.Main || phase == Phase.Final) && s.Running != terminal.Mask)
+             {
+-                Group active = groups.Find(g => g.Mask == s.Running);
++                Group active = LiveGroup(s.Running);
+                 if (active != null)
+                 {
+                     terminalFlight = ThrustAfterDownselect(s, active, terminal);
+@@ -1732,6 +1631,7 @@
+                 }
+             }
+             selected = terminal.Mask;
++            PrepareNeighbors(selected);
+             phase = Phase.Final;
+             if (!emergency) CappedFinalCommitted = true;
+             return Output(s, selected, LeadFinalLateral(terminalFlight, terminal, x, up), up, reason);
+@@ -1822,15 +1722,20 @@
+                 s.Vz * s.Vz >= 2 * (minimumUp - cfg.Gravity) *
+                     (s.Height - Math.Max(0.25, -s.Vz * cfg.SampleSeconds))) return false;
+ 
++            PrepareNeighbors(running.Mask);
+             Group best = null;
+-            foreach (Group group in groups)
++            foreach (Group group in TryFirst(fewerEngines))
+             {
+                 if (group.Count >= running.Count || !Subset(group.Mask, s.Running & running.Mask) ||
+                     !Eligible(group, s) || group.Min > force || (best != null && CompareGroups(group, best) >= 0)) continue;
+                 Flight reduced = ThrustAfterDownselect(s, running, group);
+                 double x = side;
+                 if (TryTerminalThrust(reduced, group, ref x, up) &&
+-                    TerminalHandoffReady(s, running, group)) best = group;
++                    TerminalHandoffReady(s, running, group))
++                {
++                    best = group;
++                    if (fewerEngines.Contains(group.Mask)) break;
++                }
+             }
+             if (best != null)
+             {
+@@ -1868,7 +1773,7 @@
+             // A selected, live set can remain controllable at its operating
+             // throttle even if a refresh rejects an endpoint of its range.
+             Group live = selected != 0 && Subset(selected, s.Running)
+-                ? new EngineGroups(specs, backupTorque).MakeGroup(selected) : null;
++                ? catalogBuilder.MakeGroup(selected) : null;
+             if (CanKeepFinalGroup(s, live, recoveringRise)) return live;
+ 
+             Group best = null;
+@@ -2155,7 +2060,7 @@
+         private Command Output(Flight s, long engines, double x, double up, string reason)
+         {
+             double accel = Norm(x, up);
+-            double cap = cfg.MaxG * Settings.G0;
++            double cap = cfg.ThrustLimitFor(phase) * Settings.G0;
+             // Powered Final passes a net braking vector to the flight adapter,
+             // which subtracts aerodynamics and caps the actual nozzle thrust.
+             bool netTerminalVector = phase == Phase.Final && s.Running != 0;
+@@ -2196,17 +2101,20 @@
+             entryExitReason = null;
+             relightShutdownMask = 0;
+             relightBankLimit = int.MaxValue;
++            CancelCatalogSearch();
+             coastSearch = null;
+             plan = new Plan();
+         }
+ 
++        internal static double MinimumRunningThrust(Group group) =>
++            group.Min + Settings.MinimumPositiveThrottle * (group.Max - group.Min);
++
+         private double EntryThrust(Group group, Flight s)
+         {
+             if (group == null || (group.Mask & fixedEngines) != 0 || !Eligible(group, s) ||
+                 double.IsPositiveInfinity(EngineStartDelay(group.Mask, s))) return 0;
+-            double limit = Limit(group, s, true);
+-            double floor = group.Min + Settings.MinimumPositiveThrottle * (group.Max - group.Min);
+-            return floor <= limit ? limit : 0;
++            double limit = Limit(group, s, true, Phase.EntryBurn);
++            return MinimumRunningThrust(group) <= limit ? limit : 0;
+         }
+ 
+         private Command ContinueEntryBurn(Flight s)
+@@ -2215,10 +2123,11 @@
+             if (s.SurfaceSpeed <= cfg.EntryBurnSpeed)
+                 return EndEntryBurn(s, "entry burn target reached");
+ 
+-            Group group = groups.Find(candidate => candidate.Mask == selected);
++            Group group = LiveGroup(selected);
+             double thrust = EntryThrust(group, s);
+             if (thrust <= 0)
+             {
++                CompleteCatalog();
+                 double bestDelay = double.PositiveInfinity;
+                 foreach (Group candidate in groups)
+                 {
+@@ -2282,6 +2191,7 @@
+             if (s.Contact)
+             {
+                 phase = Phase.Landed;
++                CancelCatalogSearch();
+                 return Output(s, 0, 0, 0, "contact confirmed");
+             }
+             if (s.SolidBurnActive)
+@@ -2290,11 +2200,7 @@
+                 yoloInhibit = "solid_motor_burning";
+                 return AlignForMain(s, 0, "attitude only, waiting for solid motor burnout");
+             }
+-            UpdateGroups(s);
+-            if (backgroundCatalog && completeCatalog == null &&
+-                ((crossedEntryAltitude && s.SurfaceSpeed > cfg.EntryBurnSpeed) ||
+-                 (!cfg.IgnitionAltitudeBlocked(s.Height) && s.Height <= Math.Max(50, -s.Vz * 6))))
+-                RebuildGroups(immediate: true);
++            UpdateGroupAvailability(s);
+             if (phase == Phase.Final && !emergency) CappedFinalCommitted = true;
+             if (phase == Phase.Coast && crossedEntryAltitude && s.SurfaceSpeed > cfg.EntryBurnSpeed)
+                 ResetUnpowered(Phase.EntryBurn);
+@@ -2361,17 +2267,22 @@
+                         // have no min-thrust handoff. Preserve time to replan while
+                         // braking still fits even in the ballistic case.
+                         double reserve = Math.Max(cfg.PrecisionSeconds, cfg.AttitudeResponseSeconds);
+-                        if (s.Running == 0 && s.Starting == 0 && CappedBrakeFitsAfter(s, reserve))
++                        if (s.Running == 0 && s.Starting == 0 &&
++                            ((catalogSearch != null && MayWaitForCatalog(s)) || CappedBrakeFitsAfter(s, reserve)))
+                             return AlignForMain(s, 0, !double.IsPositiveInfinity(propellantShortfall)
+                                 ? "coast, current plan exceeds reachable propellant"
+                                 : "coast, retry main plan while capped braking has margin");
+                         // A late engagement may already have spent the reserve.
++                        CompleteCatalog();
+                         plan = FindPlan(s, planningThrottle: 1, igniteNow: true);
+                     }
+                     if (!direct && (plan.Main == null || plan.Wait <= cfg.SampleSeconds * 1.5))
+                     {
+                         if (FindLaterAeroLanding(s, ref plan))
++                        {
++                            RecordCoastCheck(s, plan);
+                             return AlignForMain(s, 0, "coast, modeled aerodynamic braking opens a later powered landing window");
++                        }
+                         if (AirBrakingCanDefer(s))
+                             return AlignForMain(s, 0, "coast, retain useful aerodynamic braking");
+                     }
+@@ -2411,7 +2322,7 @@
+                 }
+             }
+ 
+-            Group running = groups.Find(g => g.Mask == selected);
++            Group running = LiveGroup(selected);
+             bool pending = (s.Starting & selected) != 0;
+             double fx, fz;
+             bool nearVertical = FinalVector(s, out fx, out fz);
+@@ -2569,7 +2480,8 @@
+             x = up = 0;
+             long active = s.Running | s.Starting;
+             int bestRank = int.MaxValue;
+-            foreach (Group group in groups)
++            if (retainedMask != 0) PrepareNeighbors(retainedMask);
++            foreach (Group group in TryFirst(retainedMask == 0 ? null : moreEngines))
+             {
+                 if (retainedMask != 0 && (group.Mask == retainedMask || !Subset(retainedMask, group.Mask))) continue;
+                 if (!Eligible(group, s)) continue;
+@@ -2592,6 +2504,7 @@
+                 bestRank = rank;
+                 x = side;
+                 up = vertical;
++                if (retainedMask != 0 && moreEngines.Contains(group.Mask)) return group;
+             }
+             return best;
+         }
+@@ -2600,6 +2513,7 @@
+         {
+             if (CappedFinalCommitted)
+                 return RecoverCappedFinal(s, fx, fz);
++            CompleteCatalog();
+             double impact = EmergencyImpactSeconds(s);
+             bool lowSpeed = !emergency && s.Vz >= -EmergencyMinimumDescentSpeed;
+             Group best = null;
+@@ -2660,7 +2574,7 @@
+             awaitingEmergencyStarts = false;
+             if (established == 0) return EstablishEmergencyThrust(s, strongest);
+ 
+-            Group active = groups.Find(g => g.Mask == s.Running);
++            Group active = LiveGroup(s.Running);
+             Command recovery;
+             if (TryResumeCappedLanding(s, established, active, out recovery)) return recovery;
+ 
+--- a/Controller/PropellantBudget.cs
++++ b/Controller/PropellantBudget.cs
+@@ -22,12 +22,52 @@
+     internal sealed class PropellantBudget
+     {
+         private readonly PropellantDemand[][] engines;
++        private Dictionary<int, double> forecastConsumed;
+         private readonly Dictionary<long, Dictionary<int, PropellantDemand>> groups =
+             new Dictionary<long, Dictionary<int, PropellantDemand>>();
+ 
+         internal PropellantBudget(PropellantDemand[][] engines)
+         {
+             this.engines = engines;
++        }
++
++        internal PropellantBudget ForForecast() =>
++            new PropellantBudget(engines)
++            {
++                forecastConsumed = forecastConsumed == null
++                    ? new Dictionary<int, double>() : new Dictionary<int, double>(forecastConsumed)
++            };
++
++        internal bool ConsumeForecast(long mask, double tons)
++        {
++            if (Shortfall(mask, tons, 0, 0) > 1e-6) return false;
++            foreach (PropellantDemand resource in Demands(mask).Values)
++            {
++                forecastConsumed.TryGetValue(resource.Resource, out double before);
++                forecastConsumed[resource.Resource] = before + resource.Fraction * tons;
++            }
++            return true;
++        }
++
++        private double Remaining(PropellantDemand fuel) =>
++            forecastConsumed != null && forecastConsumed.TryGetValue(fuel.Resource, out double consumed)
++                ? Math.Max(0, fuel.ReachableTons - consumed) : fuel.ReachableTons;
++
++        internal double ReachableTons(long mask)
++        {
++            var reachable = new Dictionary<int, double>();
++            for (int i = 0; i < engines.Length; i++)
++            {
++                if ((mask & (1L << i)) == 0) continue;
++                foreach (PropellantDemand fuel in engines[i])
++                {
++                    reachable.TryGetValue(fuel.Resource, out double before);
++                    reachable[fuel.Resource] = Math.Max(before, Remaining(fuel));
++                }
++            }
++            double total = 0;
++            foreach (double quantity in reachable.Values) total += quantity;
++            return total;
+         }
+ 
+         internal double Shortfall(long firstMask, double firstTons, long finalMask, double finalTons)
+@@ -39,18 +79,18 @@
+             foreach (PropellantDemand resource in first.Values)
+             {
+                 PropellantDemand later;
+-                double available = resource.ReachableTons;
++                double available = Remaining(resource);
+                 double required = resource.Fraction * firstTons;
+                 if (final.TryGetValue(resource.Resource, out later))
+                 {
+-                    available = Math.Min(available, later.ReachableTons);
++                    available = Math.Min(available, Remaining(later));
+                     required += later.Fraction * finalTons;
+                 }
+                 shortage = Math.Max(shortage, required - available);
+             }
+             foreach (PropellantDemand resource in final.Values)
+                 if (!first.ContainsKey(resource.Resource))
+-                    shortage = Math.Max(shortage, resource.Fraction * finalTons - resource.ReachableTons);
++                    shortage = Math.Max(shortage, resource.Fraction * finalTons - Remaining(resource));
+             return shortage;
+         }
+ 
+--- /dev/null
++++ b/Controller/TouchdownForecast.cs
+@@ -0,0 +1,389 @@
++using System;
++using System.Diagnostics;
++using System.Threading;
++
++namespace LandingPoc
++{
++    internal readonly struct FootprintAero
++    {
++        internal readonly double Drag, Lift, Cross;
++        internal readonly bool Valid, Far;
++
++        internal FootprintAero(double drag, double lift, double cross, bool far)
++        {
++            Drag = drag;
++            Lift = lift;
++            Cross = cross;
++            Valid = true;
++            Far = far;
++        }
++    }
++
++    internal readonly struct FootprintGlideSteering
++    {
++        internal readonly double BankDegrees, RollSeconds;
++
++        internal FootprintGlideSteering(double bankDegrees, double rollRate, double currentBank = 0)
++        {
++            BankDegrees = bankDegrees;
++            RollSeconds = Math.Abs(AttitudeGuidance.WrapDegrees(bankDegrees - currentBank)) / rollRate;
++        }
++    }
++
++    // Force coefficients are divided by pressure and speed squared. The
++    // immutable lookup is sampled on the KSP thread and used off-thread.
++    internal sealed class FootprintAtmosphere
++    {
++        private readonly double depth;
++        private readonly double[] pressure;
++        private readonly FootprintAero retrograde, pitched;
++        private readonly bool pitchedAvailable;
++
++        internal FootprintAtmosphere(double depth, double[] pressure, FootprintAero retrograde,
++                                     FootprintAero pitched, bool pitchedAvailable)
++        {
++            this.depth = depth;
++            this.pressure = pressure;
++            this.retrograde = retrograde;
++            this.pitched = pitched;
++            this.pitchedAvailable = pitchedAvailable;
++        }
++
++        internal double Depth => depth;
++        internal bool IsAtmospheric => depth > 0;
++        internal bool UsesFar => retrograde.Far && (!pitchedAvailable || pitched.Far);
++        internal bool HasPitchSample => !IsAtmospheric || (pitchedAvailable && pitched.Valid);
++
++        internal FootprintAtmosphere BlendPitch(FootprintAtmosphere boundary, double fraction)
++        {
++            if (boundary == null || depth != boundary.depth || !HasPitchSample || !boundary.HasPitchSample)
++                return null;
++            if (!IsAtmospheric) return this;
++            FootprintAero other = boundary.pitched;
++            var blended = new FootprintAero(
++                pitched.Drag + fraction * (other.Drag - pitched.Drag),
++                pitched.Lift + fraction * (other.Lift - pitched.Lift),
++                pitched.Cross + fraction * (other.Cross - pitched.Cross), pitched.Far && other.Far);
++            return new FootprintAtmosphere(depth, pressure, retrograde, blended, true);
++        }
++
++        internal bool Acceleration(double altitude, double horizontal, double vertical, double mass,
++                                   bool pitch, out double along, out double up, out double cross, double bankDegrees = 0)
++        {
++            along = up = cross = 0;
++            double speedSquared = horizontal * horizontal + vertical * vertical;
++            if (depth <= 0 || altitude >= depth || speedSquared < 4) return true;
++            if (pitch && !pitchedAvailable) return false;
++            FootprintAero coefficients = pitch ? pitched : retrograde;
++            if (!coefficients.Valid) return true;
++            double at = Math.Max(0, altitude) * (pressure.Length - 1) / depth;
++            int index = Math.Min(pressure.Length - 2, (int)at);
++            double q = (pressure[index] + (at - index) * (pressure[index + 1] - pressure[index])) * speedSquared / mass;
++            double speed = Math.Sqrt(speedSquared);
++            double lift = coefficients.Lift, side = coefficients.Cross;
++            if (pitch && bankDegrees != 0)
++            {
++                // Roll about the relative wind, then pitch in the rolled plane.
++                // The transverse force rotates with the pitch plane.
++                double angle = bankDegrees * AttitudeGuidance.Degree;
++                lift = coefficients.Lift * Math.Cos(angle) - coefficients.Cross * Math.Sin(angle);
++                side = coefficients.Lift * Math.Sin(angle) + coefficients.Cross * Math.Cos(angle);
++            }
++            along = q * (-coefficients.Drag * horizontal - lift * vertical) / speed;
++            up = q * (-coefficients.Drag * vertical + lift * horizontal) / speed;
++            cross = q * side;
++            return Finite(along) && Finite(up) && Finite(cross);
++        }
++
++        internal static bool Finite(double x) => !double.IsNaN(x) && !double.IsInfinity(x);
++    }
++
++    internal struct TouchdownEstimate
++    {
++        internal string Status;
++        internal double Along, Cross, Seconds, EntrySeconds, LandingSeconds, TouchdownMass;
++        internal double GlideRollSeconds, GlidePitchSeconds;
++        internal bool HasPoint, UsesFar, Atmospheric;
++    }
++
++    public sealed partial class Controller
++    {
++        // Prediction owns the controller state and reads no game objects.
++        private bool footprintSimulation;
++
++        internal Func<CancellationToken, TouchdownEstimate> CaptureFootprint(
++            Flight flight, FootprintAtmosphere atmosphere, double radius, FootprintGlideSteering glide = default)
++        {
++            Engine[] engines = (Engine[])specs.Clone();
++            Settings settings = cfg.Copy();
++            Torque control = backupTorque;
++            Plan currentPlan = plan;
++            Phase currentPhase = phase;
++            long currentBank = selected, shutdownMask = relightShutdownMask;
++            double entryAltitude = previousEntryAltitude;
++            string entryExit = entryExitReason;
++            int relightLimit = relightBankLimit;
++            bool committed = CappedFinalCommitted, relightUsed = usedAlignmentRelight;
++            var masks = new long[cachedMasks.Count];
++            cachedMasks.CopyTo(masks);
++            flight.AeroForecast = null; // The live FAR forecast may still be growing.
++            flight.EngineThrustAccelerations = null;
++            flight.IgnitionElapsed = flight.IgnitionElapsed == null ? null : (double[])flight.IgnitionElapsed.Clone();
++            flight.Propellant = flight.Propellant?.ForForecast();
++
++            return stop =>
++            {
++                stop.ThrowIfCancellationRequested();
++                var clone = new Controller(engines, settings, control)
++                {
++                    phase = currentPhase,
++                    selected = currentBank,
++                    previousEntryAltitude = entryAltitude,
++                    plan = currentPlan,
++                    entryExitReason = entryExit,
++                    CappedFinalCommitted = committed,
++                    relightShutdownMask = shutdownMask,
++                    relightBankLimit = relightLimit,
++                    usedAlignmentRelight = relightUsed,
++                    footprintSimulation = true
++                };
++                clone.cachedMasks.UnionWith(masks);
++                if (currentBank != 0) clone.cachedMasks.Add(currentBank);
++                if (currentPlan.Main != null) clone.cachedMasks.Add(currentPlan.Main.Mask);
++                if (currentPlan.Final != null) clone.cachedMasks.Add(currentPlan.Final.Mask);
++                return clone.TraceFootprint(flight, atmosphere, radius, glide, stop);
++            };
++        }
++
++        private TouchdownEstimate TraceFootprint(Flight s, FootprintAtmosphere air, double radius,
++                                                FootprintGlideSteering glide, CancellationToken stop)
++        {
++            var result = new TouchdownEstimate { Status = "no_plan", UsesFar = air.UsesFar, Atmospheric = air.IsAtmospheric };
++            if (s.SolidBurnActive || s.Contact || phase == Phase.Yolo || s.Mass <= 0 || radius <= 0)
++                return result;
++
++            double ground = s.SeaLevelAltitude - s.Height;
++            double gravityParameter = cfg.Gravity * Math.Pow(radius + s.SeaLevelAltitude, 2);
++            double originalTime = s.UniversalTime ?? 0;
++            double vx = s.SurfaceHorizontalSpeed ?? s.Vx, vy = 0;
++            double headingX = 1, headingY = 0;
++            double thrustX = s.LateralThrustAcceleration, thrustUp = s.VerticalThrustAcceleration;
++            double pitch = Math.Atan2(thrustX, Math.Max(0.01, thrustUp));
++            double nextAero = 0;
++            bool previouslyRolling = false;
++            var start = new FootprintIgnition(specs, s);
++            var watch = Stopwatch.StartNew();
++
++            while (result.Seconds < 210)
++            {
++                stop.ThrowIfCancellationRequested();
++                if (watch.ElapsedMilliseconds > 200)
++                {
++                    result.Status = "horizon";
++                    return result;
++                }
++                double dt = phase == Phase.Coast && s.Height > 500 ? 0.25 : 0.05;
++                cfg.SampleSeconds = dt;
++                double horizontal = Norm(vx, vy);
++                if (horizontal > 0.02) { headingX = vx / horizontal; headingY = vy / horizontal; }
++                s.Vx = horizontal;
++                s.SurfaceHorizontalSpeed = horizontal;
++                s.SurfaceSpeed = Norm(horizontal, s.Vz);
++                s.UniversalTime = originalTime + result.Seconds;
++                s.SeaLevelAltitude = ground + s.Height;
++                double radial = Math.Max(radius, radius + s.SeaLevelAltitude);
++                cfg.Gravity = Math.Max(0.01, gravityParameter / (radial * radial) - horizontal * horizontal / radial);
++                bool coasting = phase == Phase.Coast;
++                bool entryCrossing = coasting && previousEntryAltitude > cfg.EntryBurnAltitude &&
++                    s.SeaLevelAltitude <= cfg.EntryBurnAltitude && s.Vz < 0 && s.SurfaceSpeed > cfg.EntryBurnSpeed;
++                bool glideWindow = coasting && !entryCrossing && s.SeaLevelAltitude < cfg.EntryBurnAltitude;
++                bool rolling = glideWindow && result.GlideRollSeconds + 1e-8 < glide.RollSeconds;
++                if (rolling != previouslyRolling) nextAero = 0;
++                previouslyRolling = rolling;
++                bool pitched = glideWindow && !rolling && cfg.CoastPitchAoaDegrees != 0;
++                if (!air.Acceleration(s.SeaLevelAltitude, horizontal, s.Vz, s.Mass, pitched,
++                    out double aeroX, out double aeroUp, out double aeroCross, glide.BankDegrees))
++                {
++                    result.Status = "waiting_aero";
++                    return result;
++                }
++                s.ExternalLateralAcceleration = coasting ? 0 : aeroX;
++                s.ExternalUpAcceleration = coasting ? 0 : aeroUp;
++                s.CrossExternalAcceleration = aeroCross;
++                s.CoastAccelerationMeasured = coasting;
++                s.CoastLateralAcceleration = aeroX;
++                s.CoastUpAcceleration = aeroUp;
++                s.CoastDragRate = 0;
++                s.LateralThrustAcceleration = thrustX;
++                s.VerticalThrustAcceleration = thrustUp;
++                s.CrossThrustAcceleration = 0;
++                s.LateralThrustDirection = Math.Sin(pitch);
++                s.AttitudeRateMeasured = false;
++                s.EngineThrustMeasured = false;
++                if (coasting)
++                {
++                    s.AlignmentSeconds = rolling ? 0 : Math.Abs(cfg.CoastPitchAoaAt(s.SeaLevelAltitude)) / 20;
++                    if (air.IsAtmospheric && result.Seconds >= nextAero)
++                    {
++                        double mass = s.Mass;
++                        s.AeroForecast = AeroCoastForecast.Integrate(s, cfg.Gravity,
++                            (double h, double x, double z, out double sampleX, out double sampleUp) =>
++                                air.Acceleration(ground + h, x, z, mass, !rolling && cfg.CoastPitchAoaAt(ground + h) != 0,
++                                    out sampleX, out sampleUp, out _, glide.BankDegrees), 20);
++                        nextAero = result.Seconds + 1;
++                        s.AeroForecastAge = 0;
++                    }
++                }
++                else
++                {
++                    s.AeroForecast = null;
++                    nextAero = 0;
++                    s.AlignmentSeconds = 0;
++                }
++
++                // There is no landing ignition command allowed far above the
++                // ceiling. The Entry altitude crossing still enters guidance.
++                bool skipPlanning = coasting && s.Running == 0 && s.Starting == 0 &&
++                    cfg.IgnitionAltitudeBlocked(s.Height) &&
++                    s.Height > cfg.MaxIgnitionAltitude + Math.Max(1000, -s.Vz * 15) &&
++                    !(previousEntryAltitude > cfg.EntryBurnAltitude && s.SeaLevelAltitude <= cfg.EntryBurnAltitude);
++                Command command;
++                if (skipPlanning)
++                {
++                    previousEntryAltitude = s.SeaLevelAltitude;
++                    command = new Command { Phase = Phase.Coast };
++                }
++                else command = Tick(s);
++                if (command.Phase == Phase.Yolo) return result;
++
++                // At the Entry crossing the guidance switches back to retrograde.
++                if (pitched && command.Phase == Phase.EntryBurn &&
++                    !air.Acceleration(s.SeaLevelAltitude, horizontal, s.Vz, s.Mass, false, out aeroX, out aeroUp, out aeroCross))
++                    return result;
++
++                start.Update(command, result.Seconds, ref s);
++                var bank = s.Running == 0 ? null : LiveGroup(s.Running);
++                double desiredX = 0, desiredUp = 0;
++                if (bank != null)
++                {
++                    double x = command.X, up = command.Up;
++                    if (command.UsesTerminalGuidance)
++                    {
++                        x -= aeroX;
++                        up = Math.Max(0.01, up - aeroUp);
++                        double tilt = AttitudeGuidance.FinalTiltDegrees(AttitudeGuidance.FinalLateralDemand(horizontal),
++                            FinalTimeToContact(s, cfg)) * AttitudeGuidance.Degree;
++                        x = Math.Max(-up * Math.Tan(tilt), Math.Min(up * Math.Tan(tilt), x));
++                    }
++                    double direction = Math.Atan2(x, up);
++                    double ceiling = Limit(bank, s, true, command.Phase) / s.Mass;
++                    double floor = bank.Min / s.Mass;
++                    if (ceiling < floor) return result;
++                    double force = Math.Max(floor, Math.Min(ceiling, Norm(x, up)));
++                    desiredX = force * Math.Sin(direction);
++                    desiredUp = force * Math.Cos(direction);
++                }
++                // Approximate actuation between guidance samples. The cold
++                // start itself uses the captured per-engine spool times.
++                double response = Math.Min(1, dt / (bank == null ? 0.10 : 0.16));
++                thrustX += (desiredX - thrustX) * response;
++                thrustUp += (desiredUp - thrustUp) * response;
++                pitch = Math.Atan2(thrustX, Math.Max(0.01, thrustUp));
++                s.UprightAngle = Math.Abs(pitch);
++                s.TerminalAlignmentSeconds = s.UprightAngle / (Math.PI / 6);
++                double alongAccel = thrustX + aeroX;
++                double ax = alongAccel * headingX - aeroCross * headingY;
++                double ay = alongAccel * headingY + aeroCross * headingX;
++                double az = thrustUp + aeroUp - cfg.Gravity;
++                double nextHeight = s.Height + dt * (s.Vz + 0.5 * dt * az);
++                double elapsed = nextHeight <= 0 ? dt * s.Height / Math.Max(1e-9, s.Height - nextHeight) : dt;
++                double groundScale = radius / radial;
++                result.Along += groundScale * elapsed * (vx + 0.5 * elapsed * ax);
++                result.Cross += groundScale * elapsed * (vy + 0.5 * elapsed * ay);
++                vx += ax * elapsed;
++                vy += ay * elapsed;
++                s.Vz += az * elapsed;
++                s.Height = nextHeight;
++                result.Seconds += elapsed;
++                s.AeroForecastAge += elapsed;
++                if (command.Phase == Phase.Coast && rolling) result.GlideRollSeconds += elapsed;
++                if (command.Phase == Phase.Coast && pitched) result.GlidePitchSeconds += elapsed;
++                if (command.Phase == Phase.EntryBurn && bank != null) result.EntrySeconds += elapsed;
++                if ((command.Phase == Phase.Main || command.Phase == Phase.Final) && bank != null)
++                    result.LandingSeconds += elapsed;
++                if (bank != null)
++                {
++                    double consumed = s.Mass - MassAfter(s.Mass, Norm(thrustX, thrustUp), elapsed, bank);
++                    if (s.Propellant != null && !s.Propellant.ConsumeForecast(bank.Mask, consumed))
++                        return result;
++                    s.Mass -= consumed;
++                }
++                if (nextHeight <= 0)
++                {
++                    result.HasPoint = result.LandingSeconds > 0;
++                    result.TouchdownMass = s.Mass;
++                    if (result.HasPoint)
++                        result.Status = s.Vz < -Math.Max(3, 2 * cfg.TouchSpeed) || Norm(vx, vy) > Math.Max(3, 2 * cfg.TouchSpeed)
++                            ? "hard_contact" : "estimated";
++                    return result;
++                }
++            }
++            result.Status = "horizon";
++            return result;
++        }
++
++        private sealed class FootprintIgnition
++        {
++            private readonly Engine[] engines;
++            private readonly double[] readyAt;
++            private readonly int[] starts;
++            private long commanded;
++            internal FootprintIgnition(Engine[] engines, Flight s)
++            {
++                this.engines = engines;
++                readyAt = new double[engines.Length];
++                starts = new int[engines.Length];
++                commanded = s.Running | s.IssuedStarts;
++                for (int i = 0; i < engines.Length; i++)
++                {
++                    long bit = 1L << i;
++                    starts[i] = engines[i].Ignitions;
++                    if ((s.IssuedStarts & bit & ~s.Running) != 0)
++                    {
++                        double elapsed = s.IgnitionElapsed == null ? 0 : Math.Max(0, s.IgnitionElapsed[i]);
++                        readyAt[i] = Math.Max(0, engines[i].SpoolSeconds - elapsed);
++                    }
++                }
++            }
++
++            internal void Update(Command command, double now, ref Flight s)
++            {
++                long requested = command.Engines;
++                long additions = requested & ~commanded;
++                s.Running &= requested;
++                s.Starting = 0;
++                for (int i = 0; i < engines.Length; i++)
++                {
++                    long bit = 1L << i;
++                    if ((requested & bit) == 0) continue;
++                    if ((additions & bit) != 0)
++                    {
++                        if (starts[i] == 0 || !EngineResponse.Known(engines[i].SpoolSeconds))
++                            readyAt[i] = double.PositiveInfinity;
++                        else
++                        {
++                            readyAt[i] = now + engines[i].SpoolSeconds + command.IgnitionAlignmentSeconds +
++                                ((s.Unsettled & bit) != 0 ? s.UllageSeconds : 0);
++                            if (starts[i] > 0 && --starts[i] == 0) s.Restartable &= ~bit;
++                        }
++                    }
++                    if (now >= readyAt[i]) s.Running |= bit;
++                    else s.Starting |= bit;
++                }
++                s.EstablishedThrust = s.Running;
++                s.IssuedStarts = s.Starting;
++                commanded = requested;
++            }
++        }
++    }
++}
+--- a/Ksp/FarCoastPrediction.cs
++++ b/Ksp/FarCoastPrediction.cs
+@@ -28,6 +28,8 @@
+         }
+         private Capture pending, forecast;
+         private int sampledFrame = -1;
++        private int footprintFrame = -1, spareSamples;
++        internal bool CanSampleFootprint => !failed && calculate != null && voxelizationValid != null;
+         private bool failed;
+ 
+         internal double MeasuredDrag { get; private set; }
+@@ -72,7 +74,7 @@
+                 {
+                     sampledFrame = Time.frameCount;
+                     if (pending != null && !SamePose(pending, frame.rotation, coastPitchAoa)) pending = null;
+-                    int budget = SamplesPerFrame;
++                    int budget = SamplesPerFrame - (footprintFrame == Time.frameCount ? 1 : 0);
+                     if (pending == null && (now >= retryAt ||
+                         (forecast != null && coastPitchAoa != forecast.PitchAoa)))
+                     {
+@@ -97,12 +99,14 @@
+                     if (pending != null)
+                     {
+                         pending.Path.Advance(pending.Gravity, pending.Sample, PlanningHorizonSeconds, budget);
++                        budget = 0;
+                         if (pending.Path.Complete)
+                         {
+                             if (pending.Path.Duration > 0) forecast = pending;
+                             pending = null;
+                         }
+                     }
++                    spareSamples = budget;
+                 }
+                 Capture usable = forecast;
+                 if (usable == null || !SamePose(usable, frame.rotation, coastPitchAoa) ||
+@@ -125,6 +129,41 @@
+                 forecast = pending = null;
+                 failed = true;
+                 Debug.LogWarning("[RetroLanding] FAR prediction disabled for this engagement: " + ex.Message);
++            }
++        }
++
++        internal bool TryFootprintAero(Vessel vessel, Transform frame, Vector3d velocity, Vector3d up,
++                                       Vector3d pointing, double altitude, double pressure, out FootprintAero coefficients, Vector3d? dorsal = null)
++        {
++            coefficients = default;
++            int frameId = Time.frameCount;
++            if (!CanSampleFootprint || footprintFrame == frameId || (sampledFrame == frameId && spareSamples == 0) ||
++                pressure <= 0 || velocity.sqrMagnitude < 4 || !voxelizationValid(vessel)) return false;
++            footprintFrame = frameId;
++            try
++            {
++                Quaternion pose = dorsal.HasValue ?
++                    Quaternion.LookRotation((Vector3)dorsal.Value, (Vector3)pointing) *
++                        Quaternion.Inverse(Quaternion.LookRotation(-frame.forward, frame.up)) :
++                    Quaternion.FromToRotation(frame.up, (Vector3)pointing);
++                calculate(vessel, out Vector3 force, out _, Quaternion.Inverse(pose) * (Vector3)velocity, altitude);
++                Vector3d aero = (Vector3d)(pose * force);
++                Vector3d direction = velocity.normalized;
++                Vector3d lift = (up - Vector3d.Dot(up, direction) * direction).normalized;
++                Vector3d cross = Vector3d.Cross(up, direction).normalized;
++                double q = pressure * velocity.sqrMagnitude;
++                double drag = -Vector3d.Dot(aero, direction) / q;
++                double upForce = Vector3d.Dot(aero, lift) / q;
++                double sideForce = Vector3d.Dot(aero, cross) / q;
++                if (!FootprintAtmosphere.Finite(drag) || drag < 0 ||
++                    !FootprintAtmosphere.Finite(upForce) || !FootprintAtmosphere.Finite(sideForce)) return false;
++                coefficients = new FootprintAero(drag, upForce, sideForce, true);
++                return true;
++            }
++            catch (Exception ex)
++            {
++                Debug.LogWarning("[RetroLanding] Touchdown aero sample failed: " + ex.Message);
++                return false;
+             }
+         }
+ 
 --- a/Ksp/KspLanding.cs
 +++ b/Ksp/KspLanding.cs
 @@ -9,7 +9,6 @@
@@ -8,7 +1826,25 @@
      public sealed partial class KspLanding : MonoBehaviour
      {
          internal static KspLanding Instance { get; private set; }
-@@ -96,8 +95,7 @@
+@@ -68,10 +67,15 @@
+         private string lastYoloState;
+         private Vector3d horizontal = Vector3d.zero;
+         private Rect window = new Rect(260, 100, 300, 145);
+-        private string capText = "4";
++        private string capText = "4", boostbackCapText, entryCapText, boostbackStartAoaText, boostbackFineKmText;
++        private Vector2 settingsScroll;
++        internal Func<LandingTargetSource?, string> NativeStart;
++        internal Action NativeStop;
+         private string finalReserveText;
+         private string rollText = "0";
+-        private string coastPitchAoaText, ignitionAltitudeText, entryAltitudeText, entrySpeedText;
++        private string coastPitchAoaText, coastPitchMinText, coastPitchMaxText;
++        private string ignitionAltitudeText, entryAltitudeText, entrySpeedText;
++        private string vesselEastOffsetText, vesselNorthOffsetText;
+         private double rollDegrees;
+         private double pitchTrim, yawTrim, lastTrimAoa = double.NaN;
+         private RetrogradeAxisControl retrogradePitch, retrogradeYaw;
+@@ -96,8 +100,7 @@
          private void Awake()
          {
              Instance = this;
@@ -18,15 +1854,266 @@
              settingsStore.Current.Apply(cfg, out rollDegrees);
              SyncSettingsText();
              GameEvents.onVesselGoOnRails.Add(OnVesselGoOnRails);
-@@ -105,7 +103,6 @@
-             GameEvents.onProtoVesselSave.Add(OnVesselSnapshotSave);
-             GameEvents.onHideUI.Add(HideUI);
-             GameEvents.onShowUI.Add(ShowUI);
--            InitializeToolbar();
+@@ -115,19 +118,56 @@
+         {
+             if (!IsIdle) throw new InvalidOperationException("Recovery is active.");
+             if (settingsStore.HasCurrent) return;
+-            cfg.MaxG = acceleration / Settings.G0;
++            cfg.MaxG = cfg.BoostbackMaxG = cfg.EntryMaxG = acceleration / Settings.G0;
+             SyncSettingsText();
          }
-         internal void Engage() { if (IsIdle) StartMode(Mode.Control); }
-         internal void Disengage() { StopMode("Recovery stopped", false); }
-@@ -759,6 +756,7 @@
+ 
+         private void SyncSettingsText()
+         {
+             capText = cfg.MaxG.ToString("0.##", Invariant);
++            boostbackCapText = cfg.ThrustLimitFor(Phase.Boostback).ToString("0.##", Invariant);
++            entryCapText = cfg.ThrustLimitFor(Phase.EntryBurn).ToString("0.##", Invariant);
++            boostbackStartAoaText = cfg.BoostbackStartAoa.ToString("0.##", Invariant);
++            boostbackFineKmText = (cfg.BoostbackFineDistance / 1000).ToString("0.##", Invariant);
+             finalReserveText = cfg.PrecisionSeconds.ToString("0.##", Invariant);
+             rollText = rollDegrees.ToString("0.##", Invariant);
+             coastPitchAoaText = cfg.CoastPitchAoaDegrees.ToString("0.##", Invariant);
++            coastPitchMinText = double.IsNaN(cfg.CoastPitchAoaMinimum) ? "" : cfg.CoastPitchAoaMinimum.ToString("0.##", Invariant);
++            coastPitchMaxText = double.IsNaN(cfg.CoastPitchAoaMaximum) ? "" : cfg.CoastPitchAoaMaximum.ToString("0.##", Invariant);
+             ignitionAltitudeText = (cfg.MaxIgnitionAltitude / 1000).ToString("0.##", Invariant);
+             entryAltitudeText = (cfg.EntryBurnAltitude / 1000).ToString("0.##", Invariant);
+             entrySpeedText = cfg.EntryBurnSpeed.ToString("0.##", Invariant);
++            vesselEastOffsetText = cfg.VesselTargetEastOffset.ToString("R", Invariant);
++            vesselNorthOffsetText = cfg.VesselTargetNorthOffset.ToString("R", Invariant);
++        }
++
++        private static void DrawAoaBound(string label, ref string text, ref double bound)
++        {
++            GUILayout.BeginHorizontal();
++            GUILayout.Label(label, GUILayout.Width(135));
++            string previous = text;
++            text = GUILayout.TextField(text, 8, GUILayout.Width(55));
++            if (text != previous)
++            {
++                if (string.IsNullOrWhiteSpace(text)) bound = double.NaN;
++                else if (double.TryParse(text, NumberStyles.Float, Invariant, out double value) && value >= -90 && value <= 90)
++                    bound = value;
++            }
++            GUILayout.Label(double.IsNaN(bound) ? "Default coast AoA" : bound.ToString("0.##", Invariant));
++            GUILayout.EndHorizontal();
++        }
++
++        private static void DrawVesselOffset(string label, ref string text, ref double offset)
++        {
++            GUILayout.BeginHorizontal();
++            GUILayout.Label(label, GUILayout.Width(135));
++            string previous = text;
++            text = GUILayout.TextField(text, 14, GUILayout.Width(70));
++            if (text != previous && double.TryParse(text, NumberStyles.Float, Invariant, out double value) &&
++                FootprintAtmosphere.Finite(value))
++                offset = value;
++            GUILayout.Label("Active " + offset.ToString("0.##", Invariant));
++            GUILayout.EndHorizontal();
+         }
+ 
+         private void OnGUI()
+@@ -144,36 +184,65 @@
+         {
+             if (IsIdle)
+             {
+-                if (GUILayout.Button("Start landing")) StartMode(Mode.Control, fromWindow: true);
++                if (GUILayout.Button("Land along current track")) StartFromMenu(null);
++                bool enabled = GUI.enabled;
++                GUI.enabled = enabled && HasTargetedWaypoint(FlightGlobals.ActiveVessel);
++                if (GUILayout.Button("Land at waypoint")) StartFromMenu(LandingTargetSource.Waypoint);
++                GUI.enabled = enabled && LandedTargetFor(FlightGlobals.ActiveVessel) != null;
++                if (GUILayout.Button("Land near target vessel")) StartFromMenu(LandingTargetSource.LandedVessel);
++                GUI.enabled = enabled;
+             }
+             else if (GUILayout.Button("Stop landing"))
+-                Disengage();
++            {
++                if (NativeStop != null) NativeStop();
++                else Disengage();
++            }
+             GUILayout.Label(state);
++            settingsScroll = GUILayout.BeginScrollView(settingsScroll, GUILayout.MaxHeight(Mathf.Max(120, Screen.height - 180)));
+             Vessel active = FlightGlobals.ActiveVessel;
+             if (active != null && active.loaded && active.ReferenceTransform != null)
+                 engineBay.Draw(active, IsIdle ? null : engines, IsIdle ? 0 : Math.Max(0, lastMask));
+             DrawSettings();
++            GUILayout.EndScrollView();
+             GUI.DragWindow();
++        }
++
++        private void StartFromMenu(LandingTargetSource? source)
++        {
++            if (NativeStart != null)
++            {
++                string error = NativeStart(source);
++                if (error != null) state = error;
++                return;
++            }
++            if (source.HasValue) EngageTargetedEmbedded(source.Value, fromWindow: true);
++            else StartMode(Mode.Control, fromWindow: true);
+         }
+ 
+         private void HideUI() { uiHidden = true; }
+         private void ShowUI() { uiHidden = false; }
+ 
++        private static void DrawPositiveSetting(string label, ref string text, ref double value, double maximum, double scale = 1)
++        {
++            GUILayout.BeginHorizontal();
++            GUILayout.Label(label, GUILayout.Width(150));
++            string previous = text;
++            text = GUILayout.TextField(text, 12, GUILayout.Width(65));
++            if (text != previous && double.TryParse(text, NumberStyles.Float, Invariant, out double edited) &&
++                edited > 0 && edited <= maximum) value = edited * scale;
++            GUILayout.Label((value / scale).ToString("0.##", Invariant));
++            GUILayout.EndHorizontal();
++        }
++
+         private void DrawSettings()
+         {
+             var before = new LandingTuning(cfg, rollDegrees);
+-            GUILayout.BeginHorizontal();
+-            GUILayout.Label("Max thrust G", GUILayout.Width(100));
+-            string val = GUILayout.TextField(capText, 7, GUILayout.Width(45));
+-            double limit;
+-            if (val != capText)
+-            {
+-                capText = val;
+-                if (double.TryParse(val, NumberStyles.Float, Invariant, out limit) && limit > 0 && limit <= 20)
+-                    cfg.MaxG = limit;
+-            }
+-            GUILayout.Label("Active " + cfg.MaxG.ToString("0.##", Invariant));
+-            GUILayout.EndHorizontal();
++            DrawPositiveSetting("Landing max G", ref capText, ref cfg.MaxG, 20);
++            DrawPositiveSetting("Boostback max G", ref boostbackCapText, ref cfg.BoostbackMaxG, 20);
++            DrawPositiveSetting("Entry max G", ref entryCapText, ref cfg.EntryMaxG, 20);
++            DrawPositiveSetting("Boostback start angle (deg)", ref boostbackStartAoaText, ref cfg.BoostbackStartAoa, 180);
++            DrawPositiveSetting("Boostback fine range (km)", ref boostbackFineKmText, ref cfg.BoostbackFineDistance,
++                double.MaxValue / 1000, 1000);
+             GUILayout.BeginHorizontal();
+             GUILayout.Label("Final reserve (s)", GUILayout.Width(100));
+             string previous = finalReserveText;
+@@ -195,7 +264,7 @@
+             GUILayout.Label("Active " + rollDegrees.ToString("0.##", Invariant));
+             GUILayout.EndHorizontal();
+             GUILayout.BeginHorizontal();
+-            GUILayout.Label("Coast pitch AoA (deg)", GUILayout.Width(135));
++            GUILayout.Label("Default coast AoA (deg)", GUILayout.Width(135));
+             previous = coastPitchAoaText;
+             coastPitchAoaText = GUILayout.TextField(coastPitchAoaText, 8, GUILayout.Width(55));
+             double pitchAoa;
+@@ -204,6 +273,10 @@
+                 cfg.CoastPitchAoaDegrees = pitchAoa;
+             GUILayout.Label("Active " + cfg.CoastPitchAoaDegrees.ToString("0.##", Invariant));
+             GUILayout.EndHorizontal();
++            DrawAoaBound("Min coast AoA (deg)", ref coastPitchMinText, ref cfg.CoastPitchAoaMinimum);
++            DrawAoaBound("Max coast AoA (deg)", ref coastPitchMaxText, ref cfg.CoastPitchAoaMaximum);
++            if (cfg.MinimumCoastPitch > cfg.CoastPitchAoaDegrees || cfg.CoastPitchAoaDegrees > cfg.MaximumCoastPitch)
++                GUILayout.Label("Default coast AoA must be inside the configured bounds.");
+             GUILayout.BeginHorizontal();
+             GUILayout.Label("Max ignition AGL (km)", GUILayout.Width(135));
+             previous = ignitionAltitudeText;
+@@ -235,6 +308,8 @@
+                 cfg.EntryBurnSpeed = entrySpeed;
+             GUILayout.Label("Active " + cfg.EntryBurnSpeed.ToString("0.##", Invariant));
+             GUILayout.EndHorizontal();
++            DrawVesselOffset("Vessel east offset (m)", ref vesselEastOffsetText, ref cfg.VesselTargetEastOffset);
++            DrawVesselOffset("Vessel north offset (m)", ref vesselNorthOffsetText, ref cfg.VesselTargetNorthOffset);
+             cfg.OptimizeFuel = GUILayout.Toggle(cfg.OptimizeFuel, "Optimize fuel");
+             var current = new LandingTuning(cfg, rollDegrees);
+             GUILayout.BeginHorizontal();
+@@ -333,6 +408,8 @@
+         private void ResetGuidance()
+         {
+             bool cappedFinalCommitted = controller != null && controller.CappedFinalCommitted;
++            ResetFootprint();
++            controller?.CancelCatalogSearch();
+             ResetFinalGimbals();
+             pitchTrim = yawTrim = 0;
+             ResetRetrogradeControl();
+@@ -485,6 +562,9 @@
+         {
+             if (suspendedForWarp) return;
+             suspendedForWarp = true;
++            PauseTargeted();
++            ResetFootprint();
++            controller?.CancelCatalogSearch();
+             rotationInput = Vector3.zero;
+             throttle = 0;
+             ullaging = false;
+@@ -508,7 +588,7 @@
+         {
+             double now = Planetarium.GetUniversalTime();
+             if (remoteTechHasConnection != null) remoteTechConnected = remoteTechHasConnection(remoteTechVesselId);
+-            if (now >= nextThrust)
++            if (now >= nextThrust || controller.CoastIgnitionImminent(now))
+             {
+                 controller.RefreshThrust(MeasureSpecs(), BackupTorque());
+                 nextThrust = now + 0.5;
+@@ -518,21 +598,24 @@
+             double vz = Vector3d.Dot(velocity, up);
+             Vector3d lateral = velocity - vz * up;
+             GroundReading ground = ReadGround(up, lateral, vz);
+-            Vector3d lateralError = lateral - TerrainAvoidanceVelocity(now, up, ground, lateral, vz);
++            cfg.Gravity = vessel.mainBody.gravParameter / (vessel.CoMD - vessel.mainBody.position).sqrMagnitude;
++            Vector3d terrainVelocity = TerrainAvoidanceVelocity(now, up, ground, lateral, vz);
++            Vector3d lateralError = lateral - terrainVelocity - TargetedVelocity(up, lateral, ground, vz);
+             if (lateralError.sqrMagnitude > 0.0001) horizontal = lateralError.normalized;
+             Vector3d crossTrack = Vector3d.Cross(up, horizontal).normalized;
+-            cfg.Gravity = vessel.mainBody.gravParameter / (vessel.CoMD - vessel.mainBody.position).sqrMagnitude;
+             cfg.SampleSeconds = Time.fixedDeltaTime;
+             AttitudeVector localUp = AttitudeCoordinates(up), north = LocalNorth(up);
+             AttitudeVector surfaceRetrograde = attitude.SurfaceRetrograde(AttitudeCoordinates(velocity), AttitudeCoordinates(frame.up));
+             double coastPitchAoa = cfg.CoastPitchAoaAt(ground.SeaLevelHeight);
++            bool bankedCoast = TryTargetedGlideAttitude(ground.SeaLevelHeight, surfaceRetrograde, localUp, north,
++                ref coastPitchAoa, out Vector3d bankedPointing, out AttitudeVector bankedForward);
+             if (coastPitchAoa != lastTrimAoa)
+             {
+                 pitchTrim = yawTrim = 0;
+                 lastTrimAoa = coastPitchAoa;
+             }
+-            Vector3d coastPointing = WorldDirection(AttitudeGuidance.CoastPointing(surfaceRetrograde, localUp, north,
+-                coastPitchAoa));
++            Vector3d coastPointing = bankedCoast ? bankedPointing :
++                WorldDirection(AttitudeGuidance.CoastPointing(surfaceRetrograde, localUp, north, coastPitchAoa));
+             Vector3d braking = WorldDirection(surfaceRetrograde);
+             double tilt = Vector3.Angle(frame.up, (Vector3)braking);
+             double upright = Vector3d.Dot(frame.up, up);
+@@ -674,7 +757,13 @@
+                 flight.Running == 0 && flight.Starting == 0;
+             if (unpoweredCoast)
+                 farCoast.Update(vessel, frame, coastPointing, now, ground.SeaLevelHeight, velocity, horizontal, up, cfg, ref flight);
+-            Command command = controller.Tick(flight);
++            bool boostback = ReadTargetedCommand(flight, now, elapsed, up, velocity, thrustVector,
++                out Command command, out Vector3d boostbackPointing);
++            if (!boostback)
++            {
++                command = controller.Tick(flight);
++                ObserveTargetedRecovery(command, flight);
++            }
+             DecisionReason = command.Reason;
+             if (lastPhase == Phase.EntryBurn && command.Phase != Phase.EntryBurn)
+             {
+@@ -694,7 +783,8 @@
+                 thrustSide = Math.Max(-thrustUp * tangent, Math.Min(0, thrustSide));
+                 requested = thrustSide * horizontal + thrustUp * up;
+             }
+-            Vector3d pointing = command.Phase == Phase.EntryBurn ? braking :
++            Vector3d pointing = command.Phase == Phase.Boostback ? boostbackPointing :
++                command.Phase == Phase.EntryBurn ? braking :
+                 UsesCoastAttitude(command.Phase, ignitionBlocked) ? coastPointing :
+                 requested.sqrMagnitude > 1e-8 ? requested.normalized : up;
+             Vector3d rawPointing = pointing;
+@@ -727,7 +817,8 @@
+             else
+                 ResetFinalGimbals();
+             AttitudeVector aim = AttitudeCoordinates(pointing);
+-            AttitudeVector rollForward = attitude.RollForward(aim, localUp, north, rollDegrees, cfg.SampleSeconds);
++            bool pitchOnly = bankedCoast && command.Phase == Phase.Coast;
++            AttitudeVector rollForward = pitchOnly ? bankedForward : attitude.RollForward(aim, localUp, north, rollDegrees, cfg.SampleSeconds);
+             // KSP's pilot-facing dorsal axis is minus the reference transform's forward axis.
+             double rollError = AttitudeGuidance.RollError(AttitudeCoordinates(frame.up), AttitudeCoordinates(-frame.forward), aim, rollForward);
+             double targetProjection = Vector3d.Dot(pointing, up);
+@@ -759,6 +850,7 @@
              }
              double bodyPitchAoa = velocity.magnitude >= AttitudeGuidance.RetrogradeMinimumSpeed
                  ? AttitudeGuidance.PitchAoa(surfaceRetrograde, AttitudeCoordinates(frame.up), localUp, north) : double.NaN;
@@ -34,6 +2121,139 @@
              WriteTrace(now, flight, command, error, actualThrust, supports, upright, ground, targetProjection, lateral.magnitude,
                  unpoweredCoast, enginesFiring, velocity, pointing, rollError, bodyPitchAoa,
                  rootBody == null ? 0 : Vector3.Dot(rootBody.angularVelocity, frame.up));
+@@ -776,7 +868,7 @@
+                 state += string.Format(Invariant, "\nSurface speed {0:0} m/s | Target {1:0} m/s", flight.SurfaceSpeed, cfg.EntryBurnSpeed);
+             if (mode == Mode.Control && command.Phase != Phase.Landed)
+                 Execute(now, command, flight, pointing, rollError, startError, upright, targetProjection, actualThrust,
+-                    mainStartAcceleration, finalSteering, finalDemand, finalAimRate, finalSettledAim);
++                    mainStartAcceleration, finalSteering, finalDemand, finalAimRate, finalSettledAim, pitchOnly);
+             if (traceFinal)
+                 WriteFinalDiagnostics(now, flight, command, ground, supports, velocity, thrustVector,
+                     rawPointing, pointing, WorldDirection(rollForward), rollError, finalSteering, finalDemand, finalAimRate);
+@@ -1068,7 +1160,7 @@
+ 
+         private void Execute(double now, Command command, Flight flight, Vector3d pointing, double rollError, double alignment,
+                              double upright, double targetProjection, double actualThrust, double mainStartAcceleration,
+-                             bool finalSteering, double finalDemand, Vector3 finalAimRate, Vector3 finalSettledAim)
++                             bool finalSteering, double finalDemand, Vector3 finalAimRate, Vector3 finalSettledAim, bool pitchOnly)
+         {
+             if (vessel.ActionGroups[KSPActionGroup.SAS]) vessel.ActionGroups.SetGroup(KSPActionGroup.SAS, false);
+             double angularBraking = 0;
+@@ -1078,7 +1170,7 @@
+                 angularBraking = Settings.TerminalTurnBraking;
+             bool altitudeBlocked = cfg.IgnitionAltitudeBlocked(flight.Height);
+             bool entryBurn = command.Phase == Phase.EntryBurn;
+-            bool ignitionAllowed = entryBurn || !altitudeBlocked;
++            bool ignitionAllowed = command.Phase == Phase.Boostback || entryBurn || !altitudeBlocked;
+             bool coasting = entryBurn || UsesCoastAttitude(command.Phase, altitudeBlocked);
+             bool rcs = RcsEnabled;
+             bool trackEntryRetrograde = actualThrust < 1 &&
+@@ -1086,9 +1178,13 @@
+             Phase steeringPhase = command.Phase == Phase.Final && !finalSteering ? Phase.Landed : command.Phase;
+             rotationInput = TrackAttitude((Vector3)pointing, rollError, angularBraking, coasting, steeringPhase,
+                 finalDemand, trackEntryRetrograde, now, finalAimRate, finalSettledAim);
++            if (pitchOnly) rotationInput.z = 0;
+             if (command.DeployGear) vessel.ActionGroups.SetGroup(KSPActionGroup.Gear, true);
+-            ullaging = false;
+-            bool ready = ignitionAllowed && alignment <= Settings.IgnitionToleranceDegrees;
++            double ignitionAngle = command.Phase == Phase.Boostback ? command.BoostbackIgnitionAngle :
++                Settings.IgnitionToleranceDegrees;
++            long preparing = command.Engines == 0 ? flight.Restartable : command.Engines;
++            ullaging = command.PrepareBoostbackUllage && rcs && (flight.Unsettled & preparing) != 0;
++            bool ready = ignitionAllowed && alignment <= ignitionAngle;
+             for (int i = 0; i < engines.Count; i++)
+             {
+                 EngineBinding e = engines[i];
+@@ -1102,11 +1198,13 @@
+                 {
+                     bool unsettled = e.NeedsUllage && !e.Issued && e.Stability < 0.99;
+                     if (double.IsNaN(e.RequestedAt) && (!unsettled || rcs))
+-                        e.QueueStart(now, alignment / TurnDegreesPerSecond + (unsettled ? UllageAllowance : 0));
++                        e.QueueStart(now, (command.Phase == Phase.Boostback ?
++                            Math.Max(0, alignment - ignitionAngle) : alignment) / TurnDegreesPerSecond +
++                            (unsettled ? UllageAllowance : 0));
+                     if (unsettled) ready = false;
+                     // Continue settling while a starting engine still
+                     // produces no thrust. RF can lose stability between ticks.
+-                    ullaging |= rcs && e.NeedsUllage && alignment <= Settings.IgnitionToleranceDegrees;
++                    ullaging |= rcs && e.NeedsUllage && alignment <= ignitionAngle;
+                 }
+             }
+             throttle = 0;
+@@ -1145,7 +1243,7 @@
+                 thrust = mass * netUp / projection;
+             }
+             if (!command.Emergency)
+-                thrust = Math.Min(thrust, mass * cfg.MaxG * Settings.G0);
++                thrust = Math.Min(thrust, mass * cfg.ThrustLimitFor(command.Phase) * Settings.G0);
+             // A nonzero RF throttle requests actual ignition. Its physical floor
+             // is handled by the group planner.
+             throttle = high > low ? Mathf.Clamp((float)((thrust - low) / (high - low)), (float)Settings.MinimumPositiveThrottle, 1) : 1;
+@@ -1288,6 +1386,7 @@
+             input.pitch = rotationInput.x;
+             input.roll = rotationInput.y;
+             input.yaw = rotationInput.z;
++            if (ullaging && RcsEnabled) input.Z = -1;
+             if (!independentThrottle) return;
+             if (unmanagedEngines.Exists(e => e.Engine != null && e.Engine.isEnabled && e.Engine.moduleIsEnabled &&
+                 e.Engine.EngineIgnited && !e.Engine.independentThrottle))
+@@ -1298,7 +1397,6 @@
+                 if (vessel == FlightGlobals.ActiveVessel) FlightInputHandler.state.mainThrottle = input.mainThrottle;
+                 masterThrottleOwned = true;
+             }
+-            if (ullaging && RcsEnabled) input.Z = -1;
+         }
+ 
+         private void ReleaseMasterThrottle(FlightCtrlState input = null)
+@@ -1402,7 +1500,10 @@
+                 ",entry_burn_asl_m,entry_burn_speed_mps,effective_coast_pitch_aoa_deg,planned_join_mass_t,planned_final_throttle" +
+                 ",body_coast_pitch_aoa_deg,final_gimbal_limit_deg,master_throttle_owned" +
+                 ",hull_clearance_m,wheel_bottom_offset_m,support_colliders_active,foot_raycast_hits" +
+-                ",retrograde_pitch_authority_deg_s2,retrograde_yaw_authority_deg_s2,applied_pitch_input,applied_yaw_input");
++                ",retrograde_pitch_authority_deg_s2,retrograde_yaw_authority_deg_s2,applied_pitch_input,applied_yaw_input" +
++                ",latitude_deg,longitude_deg,touchdown_estimate_status,touchdown_estimate_lat_deg,touchdown_estimate_lon_deg" +
++                ",touchdown_waypoint_miss_m,touchdown_estimate_eta_s,touchdown_estimate_entry_s,touchdown_estimate_landing_burn_s" +
++                ",touchdown_waypoint_bearing_deg,touchdown_waypoint_east_m,touchdown_waypoint_north_m");
+             engineTrace.WriteLine("ut,bit,flight_id,part,rf,ignitions,ullage,min_kn,max_kn,actual_kn,spool_s,spool_source,available,issued,faulted,armed,flameout,previous_throttle,rf_combusting,vessel_throttle,engine_propellant_available,remotetech_connected,engine_independent_throttle_fraction,is_solid");
+             for (int i = 0; i < engines.Count; i++)
+                 Debug.LogFormat("[RetroLanding] bit {0}: {1} flightID={2}", i, engines[i].Engine.part.name, engines[i].Engine.part.flightID);
+@@ -1423,14 +1524,15 @@
+             double requestedG = c.Engines == 0 ? 0 : Controller.Norm(c.Up, c.X) / Settings.G0;
+             if (c.Engines != 0 && c.UsesTerminalGuidance && s.Running != 0)
+                 requestedG = Math.Max(0, c.Up - s.ExternalUpAcceleration) / (Settings.G0 * Math.Max(0.5, targetProjection));
+-            if (!c.Emergency) requestedG = Math.Min(requestedG, cfg.MaxG);
++            double phaseLimit = cfg.ThrustLimitFor(c.Phase);
++            if (!c.Emergency) requestedG = Math.Min(requestedG, phaseLimit);
+             int deployed = gearModules.FindAll(g => g != null && g.fsm != null && g.fsm.CurrentState == g.st_deployed).Count;
+             Collider surface = ground.Collider;
+             Collider rawSurface = ground.RawCollider;
+             string row = string.Format(Invariant,
+                 "{0:F3},{1},{2},{3:F2},{4:F2},{5:F2},{6:F3},{7},{8},{9},{10},{11:F3},{12:F3},{13:F2},{14:F2},{15:F2},{16},{17},{18},{19},{20},{21},{22:F2},{23:F3},\"{24}\",{25},{26},{27:F2},{28:F2},{29:F2},{30},\"{31}\",{32},{33},{34:F2},{35},\"{36}\",{37:F2},{38:F2},{39:F2},{40:F2},{41:F2},{42:F2},{43:F2},{44:F2},{45:F2},{46:F2},{47:F2},{48:F2},{49:F2},{50:F5},{51},{52},{53:F2}",
+                 now, mode, c.Phase, s.Height, horizontalSpeed, s.Vz, s.Mass, c.Engines, s.Running, s.Starting, s.Restartable,
+-                requestedG, thrust / (s.Mass * Settings.G0), error, cfg.MaxG, c.IgnitionLead,
++                requestedG, thrust / (s.Mass * Settings.G0), error, phaseLimit, c.IgnitionLead,
+                 s.GearCommanded, deployed, gearModules.Count, c.Emergency, supports, vessel.situation,
+                 Math.Acos(Math.Max(-1, Math.Min(1, upright))) * 180 / Math.PI, s.LateralThrustDirection,
+                 c.Reason.Replace("\"", "\"\""), c.YoloTrigger,
+@@ -1478,7 +1580,7 @@
+                 string.Format(Invariant, ",{0},{1},{2:F4},{3:F4}",
+                     retrogradePitch.Authority > 0 ? (retrogradePitch.Authority / AttitudeGuidance.Degree).ToString("F3", Invariant) : "",
+                     retrogradeYaw.Authority > 0 ? (retrogradeYaw.Authority / AttitudeGuidance.Degree).ToString("F3", Invariant) : "",
+-                    vessel.ctrlState.pitch, vessel.ctrlState.yaw));
++                    vessel.ctrlState.pitch, vessel.ctrlState.yaw) + FootprintTrace());
+             for (int i = 0; i < engines.Count; i++)
+             {
+                 EngineBinding e = engines[i];
+@@ -1504,6 +1606,9 @@
+         {
+             Mode prior = mode;
+             mode = Mode.Off;
++            StopTargeted();
++            ResetFootprint();
++            controller?.CancelCatalogSearch();
+             throttle = 0;
+             ullaging = false;
+             ResetFinalGimbals();
 --- a/Ksp/LandingEngineBay.cs
 +++ b/Ksp/LandingEngineBay.cs
 @@ -6,7 +6,7 @@
@@ -45,3 +2265,123 @@
      {
          private static readonly Color Background = new Color(0.07f, 0.11f, 0.13f);
          private static readonly Color Structure = new Color(0.41f, 0.55f, 0.57f);
+--- a/Ksp/LandingSettingsStore.cs
++++ b/Ksp/LandingSettingsStore.cs
+@@ -9,14 +9,25 @@
+     internal struct LandingTuning : IEquatable<LandingTuning>
+     {
+         internal double MaxG, FinalSeconds, Roll, CoastPitch, MaxIgnitionAltitude, EntryAltitude, EntrySpeed;
++        internal double CoastPitchMin, CoastPitchMax;
++        internal double BoostbackMaxG, EntryMaxG, BoostbackStartAoa, BoostbackFineDistance;
++        internal double VesselTargetEastOffset, VesselTargetNorthOffset;
+         internal bool OptimizeFuel;
+ 
+         internal LandingTuning(Settings settings, double roll)
+         {
+             MaxG = settings.MaxG;
++            BoostbackMaxG = settings.ThrustLimitFor(Phase.Boostback);
++            EntryMaxG = settings.ThrustLimitFor(Phase.EntryBurn);
++            BoostbackStartAoa = settings.BoostbackStartAoa;
++            BoostbackFineDistance = settings.BoostbackFineDistance;
+             FinalSeconds = settings.PrecisionSeconds;
+             Roll = roll;
+             CoastPitch = settings.CoastPitchAoaDegrees;
++            CoastPitchMin = settings.CoastPitchAoaMinimum;
++            CoastPitchMax = settings.CoastPitchAoaMaximum;
++            VesselTargetEastOffset = settings.VesselTargetEastOffset;
++            VesselTargetNorthOffset = settings.VesselTargetNorthOffset;
+             MaxIgnitionAltitude = settings.MaxIgnitionAltitude;
+             EntryAltitude = settings.EntryBurnAltitude;
+             EntrySpeed = settings.EntryBurnSpeed;
+@@ -26,19 +37,35 @@
+         internal void Apply(Settings settings, out double roll)
+         {
+             settings.MaxG = MaxG;
++            settings.BoostbackMaxG = BoostbackMaxG;
++            settings.EntryMaxG = EntryMaxG;
++            settings.BoostbackStartAoa = BoostbackStartAoa;
++            settings.BoostbackFineDistance = BoostbackFineDistance;
+             settings.PrecisionSeconds = FinalSeconds;
+             roll = Roll;
+             settings.CoastPitchAoaDegrees = CoastPitch;
++            settings.CoastPitchAoaMinimum = CoastPitchMin;
++            settings.CoastPitchAoaMaximum = CoastPitchMax;
++            settings.VesselTargetEastOffset = VesselTargetEastOffset;
++            settings.VesselTargetNorthOffset = VesselTargetNorthOffset;
+             settings.MaxIgnitionAltitude = MaxIgnitionAltitude;
+             settings.EntryBurnAltitude = EntryAltitude;
+             settings.EntryBurnSpeed = EntrySpeed;
+             settings.OptimizeFuel = OptimizeFuel;
+         }
+ 
+-        public bool Equals(LandingTuning other)
+-        {
+-            return MaxG == other.MaxG && FinalSeconds == other.FinalSeconds && Roll == other.Roll &&
+-                CoastPitch == other.CoastPitch && MaxIgnitionAltitude == other.MaxIgnitionAltitude &&
++        public bool Equals(LandingTuning other) => SameFlightSettings(other) &&
++            VesselTargetEastOffset == other.VesselTargetEastOffset && VesselTargetNorthOffset == other.VesselTargetNorthOffset;
++
++        // Offsets are captured when a target is locked. Editing them only
++        // changes future engagements.
++        internal bool SameFlightSettings(LandingTuning other)
++        {
++            return MaxG == other.MaxG && BoostbackMaxG == other.BoostbackMaxG && EntryMaxG == other.EntryMaxG &&
++                BoostbackStartAoa == other.BoostbackStartAoa && BoostbackFineDistance == other.BoostbackFineDistance &&
++                FinalSeconds == other.FinalSeconds && Roll == other.Roll &&
++                CoastPitch == other.CoastPitch && CoastPitchMin.Equals(other.CoastPitchMin) &&
++                CoastPitchMax.Equals(other.CoastPitchMax) && MaxIgnitionAltitude == other.MaxIgnitionAltitude &&
+                 EntryAltitude == other.EntryAltitude && EntrySpeed == other.EntrySpeed && OptimizeFuel == other.OptimizeFuel;
+         }
+     }
+@@ -103,12 +130,22 @@
+         private static LandingTuning Read(ConfigNode node, LandingTuning fallback)
+         {
+             if (node == null) return fallback;
++            double landing = Number(node, "maxG", fallback.MaxG, double.Epsilon, 20);
++            bool legacy = node.GetValue("maxG") != null;
+             return new LandingTuning
+             {
+-                MaxG = Number(node, "maxG", fallback.MaxG, double.Epsilon, 20),
++                MaxG = landing,
++                BoostbackMaxG = Number(node, "boostbackMaxG", legacy ? landing : fallback.BoostbackMaxG, double.Epsilon, 20),
++                EntryMaxG = Number(node, "entryMaxG", legacy ? landing : fallback.EntryMaxG, double.Epsilon, 20),
++                BoostbackStartAoa = Number(node, "boostbackStartAoa", fallback.BoostbackStartAoa, double.Epsilon, 180),
++                BoostbackFineDistance = Number(node, "boostbackFineDistance", fallback.BoostbackFineDistance, double.Epsilon),
+                 FinalSeconds = Number(node, "finalSeconds", fallback.FinalSeconds, double.Epsilon),
+                 Roll = AttitudeGuidance.WrapDegrees(Number(node, "roll", fallback.Roll, -double.MaxValue)),
+                 CoastPitch = Number(node, "coastPitch", fallback.CoastPitch, -90, 90),
++                CoastPitchMin = ReadAoaBound(node, "coastPitchMin", fallback.CoastPitchMin),
++                CoastPitchMax = ReadAoaBound(node, "coastPitchMax", fallback.CoastPitchMax),
++                VesselTargetEastOffset = Number(node, "vesselTargetEastOffset", fallback.VesselTargetEastOffset, -double.MaxValue),
++                VesselTargetNorthOffset = Number(node, "vesselTargetNorthOffset", fallback.VesselTargetNorthOffset, -double.MaxValue),
+                 MaxIgnitionAltitude = Number(node, "maxIgnitionAltitude", fallback.MaxIgnitionAltitude, 0),
+                 EntryAltitude = Number(node, "entryAltitude", fallback.EntryAltitude, double.Epsilon),
+                 EntrySpeed = Number(node, "entrySpeed", fallback.EntrySpeed, double.Epsilon),
+@@ -116,6 +153,9 @@
+             };
+         }
+ 
++        private static double ReadAoaBound(ConfigNode node, string key, double fallback) =>
++            node.GetValue(key) == "default" ? double.NaN : Number(node, key, fallback, -90, 90);
++
+         private static double Number(ConfigNode node, string key, double fallback, double min, double max = double.MaxValue)
+         {
+             return double.TryParse(node.GetValue(key), NumberStyles.Float, Invariant, out double value) &&
+@@ -126,9 +166,17 @@
+         {
+             var node = new ConfigNode(name);
+             node.AddValue("maxG", values.MaxG.ToString("R", Invariant));
++            node.AddValue("boostbackMaxG", values.BoostbackMaxG.ToString("R", Invariant));
++            node.AddValue("entryMaxG", values.EntryMaxG.ToString("R", Invariant));
++            node.AddValue("boostbackStartAoa", values.BoostbackStartAoa.ToString("R", Invariant));
++            node.AddValue("boostbackFineDistance", values.BoostbackFineDistance.ToString("R", Invariant));
+             node.AddValue("finalSeconds", values.FinalSeconds.ToString("R", Invariant));
+             node.AddValue("roll", values.Roll.ToString("R", Invariant));
+             node.AddValue("coastPitch", values.CoastPitch.ToString("R", Invariant));
++            node.AddValue("coastPitchMin", double.IsNaN(values.CoastPitchMin) ? "default" : values.CoastPitchMin.ToString("R", Invariant));
++            node.AddValue("coastPitchMax", double.IsNaN(values.CoastPitchMax) ? "default" : values.CoastPitchMax.ToString("R", Invariant));
++            node.AddValue("vesselTargetEastOffset", values.VesselTargetEastOffset.ToString("R", Invariant));
++            node.AddValue("vesselTargetNorthOffset", values.VesselTargetNorthOffset.ToString("R", Invariant));
+             node.AddValue("maxIgnitionAltitude", values.MaxIgnitionAltitude.ToString("R", Invariant));
+             node.AddValue("entryAltitude", values.EntryAltitude.ToString("R", Invariant));
+             node.AddValue("entrySpeed", values.EntrySpeed.ToString("R", Invariant));

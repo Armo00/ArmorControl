@@ -15,12 +15,40 @@ namespace ArmorOverhaul.ArmorControl.Protocol
             }
             json.Append("{\"active\":").Append(value.Active ? "true" : "false");
             Append(json, "canStart", value.CanStart);
+            Append(json, "canStartTargeted", value.CanStartTargeted);
+            AppendNullable(json, "vesselTargetId", value.VesselTargetId);
+            AppendNullable(json, "vesselTargetName", value.VesselTargetName);
+            if (value.Targeted != null)
+            {
+                json.Append(",\"targeted\":{\"waypoint\":").Append(Quote(value.Targeted.Waypoint));
+                Append(json, "state", value.Targeted.State);
+                Append(json, "vesselTarget", value.Targeted.VesselTarget);
+                if (value.Targeted.VesselTarget)
+                {
+                    Append(json, "eastOffset", value.Targeted.EastOffset);
+                    Append(json, "northOffset", value.Targeted.NorthOffset);
+                }
+                Append(json, "fallback", value.Targeted.Fallback);
+                AppendNullable(json, "warning", value.Targeted.Warning);
+                Append(json, "pitch", value.Targeted.Pitch);
+                Append(json, "bank", value.Targeted.Bank);
+                Append(json, "boostRemaining", value.Targeted.BoostRemaining);
+                json.Append('}');
+            }
             AppendNullable(json, "status", value.Status);
             AppendNullable(json, "reason", value.Reason);
             json.Append(",\"tuning\":{\"maxG\":").Append(Number(value.Tuning.MaxG));
+            Append(json, "boostbackMaxG", value.Tuning.BoostbackMaxG);
+            Append(json, "entryMaxG", value.Tuning.EntryMaxG);
+            Append(json, "boostbackStartAoa", value.Tuning.BoostbackStartAoa);
+            Append(json, "boostbackFineKm", value.Tuning.BoostbackFineDistance / 1000);
             Append(json, "finalSeconds", value.Tuning.FinalSeconds);
             Append(json, "roll", value.Tuning.Roll);
             Append(json, "coastPitch", value.Tuning.CoastPitch);
+            Append(json, "coastPitchMin", value.Tuning.CoastPitchMin);
+            Append(json, "coastPitchMax", value.Tuning.CoastPitchMax);
+            Append(json, "vesselTargetEastOffset", value.Tuning.VesselTargetEastOffset);
+            Append(json, "vesselTargetNorthOffset", value.Tuning.VesselTargetNorthOffset);
             Append(json, "maxIgnitionKm", value.Tuning.MaxIgnitionAltitude / 1000);
             Append(json, "entryAltitudeKm", value.Tuning.EntryAltitude / 1000);
             Append(json, "entrySpeed", value.Tuning.EntrySpeed);
@@ -36,6 +64,27 @@ namespace ArmorOverhaul.ArmorControl.Protocol
                 Append(json, "targetAoa", flight.TargetAoa);
                 Append(json, "surfaceSpeed", flight.SurfaceSpeed);
                 Append(json, "entrySpeed", flight.EntrySpeed);
+                if (flight.Touchdown is RetroTouchdown touchdown)
+                {
+                    json.Append(",\"touchdown\":{\"status\":");
+                    json.Append(Quote(touchdown.Status));
+                    AppendNullable(json, "waypoint", touchdown.Waypoint);
+                    Append(json, "far", touchdown.UsesFar);
+                    Append(json, "atmospheric", touchdown.Atmospheric);
+                    if (touchdown.HasPoint)
+                    {
+                        Append(json, "latitude", touchdown.Latitude);
+                        Append(json, "longitude", touchdown.Longitude);
+                        Append(json, "missDistance", touchdown.MissDistance);
+                        Append(json, "missBearing", touchdown.MissBearing);
+                        Append(json, "missEast", touchdown.MissEast);
+                        Append(json, "missNorth", touchdown.MissNorth);
+                        Append(json, "eta", touchdown.Eta);
+                        Append(json, "entrySeconds", touchdown.EntrySeconds);
+                        Append(json, "landingSeconds", touchdown.LandingSeconds);
+                    }
+                    json.Append('}');
+                }
                 json.Append('}');
             }
             if (value.EngineBay != null) AppendRetroEngineBay(json, value.EngineBay);
