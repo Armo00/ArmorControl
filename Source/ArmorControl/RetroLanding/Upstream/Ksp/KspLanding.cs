@@ -67,7 +67,10 @@ namespace KspRetroLanding
         private string lastYoloInhibit;
         private string lastYoloState;
         private Vector3d horizontal = Vector3d.zero;
-        private Rect window = new Rect(260, 100, 300, 145);
+        private Rect window = new Rect(260, 100, LandingPanelLayout.PreferredWidth, LandingPanelLayout.PreferredHeight);
+        private LandingPanelLayout panelLayout;
+        private GUISkin panelSkin;
+        private GUIStyle panelLabel;
         private string capText = "4", boostbackCapText, entryCapText, boostbackStartAoaText, boostbackFineKmText;
         private Vector2 settingsScroll;
         internal Func<LandingTargetSource?, string> NativeStart;
@@ -142,10 +145,10 @@ namespace KspRetroLanding
             vesselNorthOffsetText = cfg.VesselTargetNorthOffset.ToString("R", Invariant);
         }
 
-        private static void DrawAoaBound(string label, ref string text, ref double bound)
+        private void DrawAoaBound(string label, ref string text, ref double bound)
         {
-            GUILayout.BeginHorizontal();
-            GUILayout.Label(label, GUILayout.Width(135));
+            BeginSettingRow();
+            DrawSettingLabel(label, 135);
             string previous = text;
             text = GUILayout.TextField(text, 8, GUILayout.Width(55));
             if (text != previous)
@@ -154,30 +157,41 @@ namespace KspRetroLanding
                 else if (double.TryParse(text, NumberStyles.Float, Invariant, out double value) && value >= -90 && value <= 90)
                     bound = value;
             }
-            GUILayout.Label(double.IsNaN(bound) ? "Default coast AoA" : bound.ToString("0.##", Invariant));
-            GUILayout.EndHorizontal();
+            GUILayout.Label(double.IsNaN(bound) ? "Default coast AoA" : bound.ToString("0.##", Invariant), panelLabel);
+            EndSettingRow();
         }
 
-        private static void DrawVesselOffset(string label, ref string text, ref double offset)
+        private void DrawVesselOffset(string label, ref string text, ref double offset)
         {
-            GUILayout.BeginHorizontal();
-            GUILayout.Label(label, GUILayout.Width(135));
+            BeginSettingRow();
+            DrawSettingLabel(label, 135);
             string previous = text;
             text = GUILayout.TextField(text, 14, GUILayout.Width(70));
             if (text != previous && double.TryParse(text, NumberStyles.Float, Invariant, out double value) &&
                 FootprintAtmosphere.Finite(value))
                 offset = value;
-            GUILayout.Label("Active " + offset.ToString("0.##", Invariant));
-            GUILayout.EndHorizontal();
+            GUILayout.Label("Active " + offset.ToString("0.##", Invariant), panelLabel);
+            EndSettingRow();
         }
 
         private void OnGUI()
         {
             if (toolbarOpen && !uiHidden && FlightGlobals.ready && FlightGlobals.ActiveVessel != null)
             {
+                var skin = GUI.skin;
+                if (panelSkin != skin)
+                {
+                    panelSkin = skin;
+                    panelLabel = new GUIStyle(skin.label) { wordWrap = true };
+                }
+                panelLayout = new LandingPanelLayout(Screen.width, Screen.height,
+                    skin.window.padding.horizontal, skin.verticalScrollbar.fixedWidth + skin.verticalScrollbar.margin.horizontal);
+                window.width = panelLayout.Width;
+                window.height = panelLayout.Height;
                 window.x = Mathf.Clamp(window.x, 0, Mathf.Max(0, Screen.width - window.width));
                 window.y = Mathf.Clamp(window.y, 0, Mathf.Max(0, Screen.height - window.height));
-                window = GUILayout.Window(GetInstanceID(), window, DrawWindow, "Retro Landing");
+                window = GUILayout.Window(GetInstanceID(), window, DrawWindow, "Retro Landing",
+                    GUILayout.Width(panelLayout.Width), GUILayout.Height(panelLayout.Height));
             }
         }
 
@@ -198,12 +212,15 @@ namespace KspRetroLanding
                 if (NativeStop != null) NativeStop();
                 else Disengage();
             }
-            GUILayout.Label(state);
-            settingsScroll = GUILayout.BeginScrollView(settingsScroll, GUILayout.MaxHeight(Mathf.Max(120, Screen.height - 180)));
+            GUILayout.Label(state, panelLabel);
+            settingsScroll = GUILayout.BeginScrollView(new Vector2(0, settingsScroll.y), false, false,
+                GUIStyle.none, GUI.skin.verticalScrollbar, GUILayout.ExpandWidth(true), GUILayout.ExpandHeight(true));
+            GUILayout.BeginVertical(GUILayout.Width(panelLayout.ContentWidth), GUILayout.ExpandWidth(false));
             Vessel active = FlightGlobals.ActiveVessel;
             if (active != null && active.loaded && active.ReferenceTransform != null)
-                engineBay.Draw(active, IsIdle ? null : engines, IsIdle ? 0 : Math.Max(0, lastMask));
+                engineBay.Draw(active, IsIdle ? null : engines, IsIdle ? 0 : Math.Max(0, lastMask), panelLayout, panelLabel);
             DrawSettings();
+            GUILayout.EndVertical();
             GUILayout.EndScrollView();
             GUI.DragWindow();
         }
@@ -223,16 +240,34 @@ namespace KspRetroLanding
         private void HideUI() { uiHidden = true; }
         private void ShowUI() { uiHidden = false; }
 
-        private static void DrawPositiveSetting(string label, ref string text, ref double value, double maximum, double scale = 1)
+        private void BeginSettingRow()
         {
-            GUILayout.BeginHorizontal();
-            GUILayout.Label(label, GUILayout.Width(150));
+            if (panelLayout.StackSettings) GUILayout.BeginVertical();
+            else GUILayout.BeginHorizontal();
+        }
+
+        private void EndSettingRow()
+        {
+            if (panelLayout.StackSettings) GUILayout.EndVertical();
+            else GUILayout.EndHorizontal();
+        }
+
+        private void DrawSettingLabel(string label, float width)
+        {
+            if (panelLayout.StackSettings) GUILayout.Label(label, panelLabel);
+            else GUILayout.Label(label, panelLabel, GUILayout.Width(width));
+        }
+
+        private void DrawPositiveSetting(string label, ref string text, ref double value, double maximum, double scale = 1)
+        {
+            BeginSettingRow();
+            DrawSettingLabel(label, 150);
             string previous = text;
             text = GUILayout.TextField(text, 12, GUILayout.Width(65));
             if (text != previous && double.TryParse(text, NumberStyles.Float, Invariant, out double edited) &&
                 edited > 0 && edited <= maximum) value = edited * scale;
-            GUILayout.Label((value / scale).ToString("0.##", Invariant));
-            GUILayout.EndHorizontal();
+            GUILayout.Label((value / scale).ToString("0.##", Invariant), panelLabel);
+            EndSettingRow();
         }
 
         private void DrawSettings()
@@ -244,42 +279,42 @@ namespace KspRetroLanding
             DrawPositiveSetting("Boostback start angle (deg)", ref boostbackStartAoaText, ref cfg.BoostbackStartAoa, 180);
             DrawPositiveSetting("Boostback fine range (km)", ref boostbackFineKmText, ref cfg.BoostbackFineDistance,
                 double.MaxValue / 1000, 1000);
-            GUILayout.BeginHorizontal();
-            GUILayout.Label("Final reserve (s)", GUILayout.Width(100));
+            BeginSettingRow();
+            DrawSettingLabel("Final reserve (s)", 100);
             string previous = finalReserveText;
             finalReserveText = GUILayout.TextField(finalReserveText, 7, GUILayout.Width(45));
             double reserve;
             if (finalReserveText != previous && double.TryParse(finalReserveText, NumberStyles.Float, Invariant, out reserve) &&
                 reserve > 0 && !double.IsInfinity(reserve))
                 cfg.PrecisionSeconds = reserve;
-            GUILayout.Label("Active " + cfg.PrecisionSeconds.ToString("0.##", Invariant));
-            GUILayout.EndHorizontal();
-            GUILayout.BeginHorizontal();
-            GUILayout.Label("Roll (deg)", GUILayout.Width(100));
+            GUILayout.Label("Active " + cfg.PrecisionSeconds.ToString("0.##", Invariant), panelLabel);
+            EndSettingRow();
+            BeginSettingRow();
+            DrawSettingLabel("Roll (deg)", 100);
             previous = rollText;
             rollText = GUILayout.TextField(rollText, 8, GUILayout.Width(55));
             double roll;
             if (rollText != previous && double.TryParse(rollText, NumberStyles.Float, Invariant, out roll) &&
                 !double.IsNaN(roll) && !double.IsInfinity(roll))
                 rollDegrees = AttitudeGuidance.WrapDegrees(roll);
-            GUILayout.Label("Active " + rollDegrees.ToString("0.##", Invariant));
-            GUILayout.EndHorizontal();
-            GUILayout.BeginHorizontal();
-            GUILayout.Label("Default coast AoA (deg)", GUILayout.Width(135));
+            GUILayout.Label("Active " + rollDegrees.ToString("0.##", Invariant), panelLabel);
+            EndSettingRow();
+            BeginSettingRow();
+            DrawSettingLabel("Default coast AoA (deg)", 135);
             previous = coastPitchAoaText;
             coastPitchAoaText = GUILayout.TextField(coastPitchAoaText, 8, GUILayout.Width(55));
             double pitchAoa;
             if (coastPitchAoaText != previous && double.TryParse(coastPitchAoaText, NumberStyles.Float, Invariant, out pitchAoa) &&
                 pitchAoa >= -90 && pitchAoa <= 90)
                 cfg.CoastPitchAoaDegrees = pitchAoa;
-            GUILayout.Label("Active " + cfg.CoastPitchAoaDegrees.ToString("0.##", Invariant));
-            GUILayout.EndHorizontal();
+            GUILayout.Label("Active " + cfg.CoastPitchAoaDegrees.ToString("0.##", Invariant), panelLabel);
+            EndSettingRow();
             DrawAoaBound("Min coast AoA (deg)", ref coastPitchMinText, ref cfg.CoastPitchAoaMinimum);
             DrawAoaBound("Max coast AoA (deg)", ref coastPitchMaxText, ref cfg.CoastPitchAoaMaximum);
             if (cfg.MinimumCoastPitch > cfg.CoastPitchAoaDegrees || cfg.CoastPitchAoaDegrees > cfg.MaximumCoastPitch)
-                GUILayout.Label("Default coast AoA must be inside the configured bounds.");
-            GUILayout.BeginHorizontal();
-            GUILayout.Label("Max ignition AGL (km)", GUILayout.Width(135));
+                GUILayout.Label("Default coast AoA must be inside the configured bounds.", panelLabel);
+            BeginSettingRow();
+            DrawSettingLabel("Max ignition AGL (km)", 135);
             previous = ignitionAltitudeText;
             ignitionAltitudeText = GUILayout.TextField(ignitionAltitudeText, 8, GUILayout.Width(55));
             double altitudeKm;
@@ -287,34 +322,34 @@ namespace KspRetroLanding
                 altitudeKm >= 0 && altitudeKm <= double.MaxValue / 1000)
                 cfg.MaxIgnitionAltitude = altitudeKm * 1000;
             GUILayout.Label(cfg.MaxIgnitionAltitude > 0
-                ? "Active " + (cfg.MaxIgnitionAltitude / 1000).ToString("0.##", Invariant) : "Off");
-            GUILayout.EndHorizontal();
-            GUILayout.BeginHorizontal();
-            GUILayout.Label("Entry burn ASL (km)", GUILayout.Width(135));
+                ? "Active " + (cfg.MaxIgnitionAltitude / 1000).ToString("0.##", Invariant) : "Off", panelLabel);
+            EndSettingRow();
+            BeginSettingRow();
+            DrawSettingLabel("Entry burn ASL (km)", 135);
             previous = entryAltitudeText;
             entryAltitudeText = GUILayout.TextField(entryAltitudeText, 8, GUILayout.Width(55));
             double entryKm;
             if (entryAltitudeText != previous && double.TryParse(entryAltitudeText, NumberStyles.Float, Invariant, out entryKm) &&
                 entryKm > 0 && entryKm <= double.MaxValue / 1000)
                 cfg.EntryBurnAltitude = entryKm * 1000;
-            GUILayout.Label("Active " + (cfg.EntryBurnAltitude / 1000).ToString("0.##", Invariant));
-            GUILayout.EndHorizontal();
-            GUILayout.BeginHorizontal();
-            GUILayout.Label("Entry speed (m/s)", GUILayout.Width(135));
+            GUILayout.Label("Active " + (cfg.EntryBurnAltitude / 1000).ToString("0.##", Invariant), panelLabel);
+            EndSettingRow();
+            BeginSettingRow();
+            DrawSettingLabel("Entry speed (m/s)", 135);
             previous = entrySpeedText;
             entrySpeedText = GUILayout.TextField(entrySpeedText, 8, GUILayout.Width(55));
             double entrySpeed;
             if (entrySpeedText != previous && double.TryParse(entrySpeedText, NumberStyles.Float, Invariant, out entrySpeed) &&
                 entrySpeed > 0 && !double.IsInfinity(entrySpeed))
                 cfg.EntryBurnSpeed = entrySpeed;
-            GUILayout.Label("Active " + cfg.EntryBurnSpeed.ToString("0.##", Invariant));
-            GUILayout.EndHorizontal();
+            GUILayout.Label("Active " + cfg.EntryBurnSpeed.ToString("0.##", Invariant), panelLabel);
+            EndSettingRow();
             DrawVesselOffset("Vessel east offset (m)", ref vesselEastOffsetText, ref cfg.VesselTargetEastOffset);
             DrawVesselOffset("Vessel north offset (m)", ref vesselNorthOffsetText, ref cfg.VesselTargetNorthOffset);
             cfg.OptimizeFuel = GUILayout.Toggle(cfg.OptimizeFuel, "Optimize fuel");
             cfg.OptimizeRecoveryTrajectory = GUILayout.Toggle(cfg.OptimizeRecoveryTrajectory, "Optimize recovery trajectory");
             var current = new LandingTuning(cfg, rollDegrees);
-            GUILayout.BeginHorizontal();
+            BeginSettingRow();
             if (GUILayout.Button("Reset to defaults"))
             {
                 settingsStore.Reset().Apply(cfg, out rollDegrees);
@@ -324,7 +359,7 @@ namespace KspRetroLanding
                 settingsStore.SaveDefaults(current);
             else if (!current.Equals(before))
                 settingsStore.SaveCurrent(current);
-            GUILayout.EndHorizontal();
+            EndSettingRow();
         }
 
         private void StartMode(Mode requested, bool fromWindow = false)
@@ -415,6 +450,7 @@ namespace KspRetroLanding
             ResetFinalGimbals();
             pitchTrim = yawTrim = 0;
             ResetRetrogradeControl();
+            yawCommand = yawWritten = default;
             horizontal = Vector3d.zero;
             previousSampleTime = double.NaN;
             farCoast = new FarCoastPrediction();
@@ -973,7 +1009,7 @@ namespace KspRetroLanding
         {
             double now = Planetarium.GetUniversalTime();
             Vector3 up = (Vector3)(vessel.CoMD - vessel.mainBody.position).normalized;
-            rotationInput = TrackAttitude(up, 0, 0, true);
+            rotationInput = TrackAttitude(up, 0, 0, true, now: now);
             int supported = supportWheels.FindAll(w => w != null && w.isGrounded).Count;
             Rigidbody root = vessel.rootPart.rb;
             bool settled = supported >= 3 && vessel.srf_velocity.sqrMagnitude < 0.25 &&
@@ -1400,6 +1436,7 @@ namespace KspRetroLanding
                 ResetRetrogradeControl();
             input.z *= (float)yawAssist;
             if (glideAttitude) input.y = (float)AttitudeGuidance.LimitGlideRoll(input.x, input.y, input.z);
+            if (trace != null) yawCommand = new LandingYawSample(now, error.z, body != null ? (double)rate.z : double.NaN, input.z);
             return input;
         }
 
@@ -1427,6 +1464,8 @@ namespace KspRetroLanding
             input.pitch = rotationInput.x;
             input.roll = rotationInput.y;
             input.yaw = rotationInput.z;
+            if (trace != null && yawCommand.Valid)
+                yawWritten = yawCommand.Written(Planetarium.GetUniversalTime(), input.yaw);
             if (ullaging && RcsEnabled) input.Z = -1;
             if (!independentThrottle) return;
             if (unmanagedEngines.Exists(e => e.Engine != null && e.Engine.isEnabled && e.Engine.moduleIsEnabled &&
@@ -1545,7 +1584,8 @@ namespace KspRetroLanding
                 ",latitude_deg,longitude_deg,touchdown_estimate_status,touchdown_estimate_lat_deg,touchdown_estimate_lon_deg" +
                 ",touchdown_waypoint_miss_m,touchdown_estimate_eta_s,touchdown_estimate_entry_s,touchdown_estimate_landing_burn_s" +
                 ",touchdown_waypoint_bearing_deg,touchdown_waypoint_east_m,touchdown_waypoint_north_m" +
-                BoostbackTraceColumns + ",render_frame,render_dt_s,far_total_calls,far_total_ms,far_peak_frame_ms,targeted_glide_tolerance_m");
+                 BoostbackTraceColumns + ",render_frame,render_dt_s,far_total_calls,far_total_ms,far_peak_frame_ms,targeted_glide_tolerance_m" +
+                 LandingYawSample.Columns);
             engineTrace.WriteLine("ut,bit,flight_id,part,rf,ignitions,ullage,min_kn,max_kn,actual_kn,spool_s,spool_source,available,issued,faulted,armed,flameout,previous_throttle,rf_combusting,vessel_throttle,engine_propellant_available,remotetech_connected,engine_independent_throttle_fraction,is_solid,activate_ut");
             for (int i = 0; i < engines.Count; i++)
                 Debug.LogFormat("[RetroLanding] bit {0}: {1} flightID={2}", i, engines[i].Engine.part.name, engines[i].Engine.part.flightID);
@@ -1626,7 +1666,8 @@ namespace KspRetroLanding
                 string.Format(Invariant, ",{0},{1:F4},{2},{3:F3},{4:F3},{5}", Time.frameCount, Time.unscaledDeltaTime,
                     farCoast.QueryCount, farCoast.QueryMilliseconds, farCoast.TakePeakFrameMilliseconds(),
                     c.Phase == Phase.Coast && targeted?.Leg == TargetedLeg.Recovery && !targeted.StandardFallback
-                        ? TargetedLandingGuidance.GlideTolerance(s.SeaLevelAltitude, targeted.Height, cfg).ToString("F2", Invariant) : ""));
+                         ? TargetedLandingGuidance.GlideTolerance(s.SeaLevelAltitude, targeted.Height, cfg).ToString("F2", Invariant) : "") +
+                 yawWritten.ToCsv(Invariant));
             for (int i = 0; i < engines.Count; i++)
             {
                 EngineBinding e = engines[i];

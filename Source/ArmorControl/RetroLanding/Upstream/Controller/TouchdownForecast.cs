@@ -24,13 +24,25 @@ namespace LandingPoc
         internal readonly double BankDegrees, RollSeconds;
         private readonly AttitudeVector observedDirection, desiredDirection;
         private readonly double pointingError, pointingSeconds;
+        private readonly bool trackRollProgress;
         internal readonly bool UsesMeasuredPose;
 
         internal FootprintGlideSteering(double bankDegrees, double rollRate, double currentBank = 0,
-                                        double desiredAoa = 0, AttitudeVector currentDirection = default, double responseSeconds = 0)
+                                        double desiredAoa = 0, AttitudeVector currentDirection = default, double responseSeconds = 0,
+                                        double observedBankRate = double.NaN, double commandedBank = double.NaN,
+                                        bool useRealizablePose = false)
         {
             BankDegrees = bankDegrees;
-            RollSeconds = Math.Abs(AttitudeGuidance.WrapDegrees(bankDegrees - currentBank)) / rollRate;
+            trackRollProgress = useRealizablePose;
+            double change = AttitudeGuidance.WrapDegrees(bankDegrees - currentBank);
+            double heldError = AttitudeGuidance.WrapDegrees(commandedBank - currentBank);
+            double effectiveRollRate = rollRate;
+            // If the previous command is already asking for this turn, use
+            // its observed progress in the moving wind frame.
+            if (useRealizablePose && FootprintAtmosphere.Finite(observedBankRate) &&
+                Math.Abs(heldError) > 5 && change * heldError > 0)
+                effectiveRollRate = Math.Max(0, Math.Min(rollRate, Math.Sign(change) * observedBankRate));
+            RollSeconds = change == 0 ? 0 : effectiveRollRate > 0 ? Math.Abs(change) / effectiveRollRate : double.PositiveInfinity;
             UsesMeasuredPose = currentDirection.Length > 0.5;
             observedDirection = desiredDirection = default;
             pointingError = pointingSeconds = 0;
@@ -45,6 +57,8 @@ namespace LandingPoc
             pointingSeconds = Math.Max(responseSeconds, pointingError / (AttitudeGuidance.Degree * rollRate));
         }
 
+        internal double AcquisitionSeconds => Math.Max(pointingSeconds, RollSeconds);
+
         internal double RollRateFraction(double elapsed) => !UsesMeasuredPose || elapsed >= pointingSeconds ? 1 :
             AttitudeGuidance.GlideRollPointingWeight(pointingError * (1 - elapsed / pointingSeconds));
 
@@ -58,7 +72,9 @@ namespace LandingPoc
                 if (rollElapsed + 1e-8 >= RollSeconds) pitchFraction = 1;
                 return;
             }
-            if (elapsed >= pointingSeconds)
+            double progress = elapsed >= pointingSeconds ? 1 : elapsed / pointingSeconds;
+            if (trackRollProgress && RollSeconds > 0) progress = Math.Min(progress, rollElapsed / RollSeconds);
+            if (progress >= 1)
             {
                 pitchFraction = 1;
                 return;
@@ -67,7 +83,7 @@ namespace LandingPoc
             // Follow the nose even while body roll is waiting for authority.
             // Use the sampled AoA for the force magnitude and rotate lift into
             // the plane of the transient nose direction.
-            var nose = observedDirection + (desiredDirection - observedDirection) * (elapsed / pointingSeconds);
+            var nose = observedDirection + (desiredDirection - observedDirection) * progress;
             int sign = Math.Sign(desiredAoa);
             bank = Math.Atan2(sign * nose.Z, sign * nose.Y) / AttitudeGuidance.Degree;
             double transverse = Math.Sqrt(nose.Y * nose.Y + nose.Z * nose.Z);

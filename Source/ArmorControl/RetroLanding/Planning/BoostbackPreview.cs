@@ -19,6 +19,8 @@ namespace LandingPoc
         // Observed arrow direction in the retrograde, pitch-up and lateral basis.
         internal AttitudeVector CurrentGlideDirection;
         internal double PreferredGlideAoa = double.NaN, PreferredGlideBank;
+        internal bool TrackLiveGlide;
+        internal double CurrentGlideBankRate = double.NaN, GlideTimeAvailable = double.NaN;
         // East, north and up at the captured position.
         internal AttitudeVector BoostbackBodyAxis;
         internal double BoostbackTurnRate;
@@ -44,6 +46,8 @@ namespace LandingPoc
     internal sealed class BoostbackPreviewResult
     {
         internal string Status;
+        internal string GlideDecision;
+        internal double HeldGlideMiss = double.NaN;
         internal BoostbackApproach GlideApproach;
         internal int Footprints, ScreenedFootprints, VerifiedCandidates;
         internal int BoostbackBanks, BoostbackTrials, BoostbackBurnFailures, BoostbackFuelFailures, BoostbackLandingFailures;
@@ -150,6 +154,13 @@ namespace LandingPoc
         {
             var output = new BoostbackPreviewResult();
             var elapsed = Stopwatch.StartNew();
+            if (includeGlide && input.TrackLiveGlide && input.MaxDeltaV == 0)
+            {
+                PlanLiveGlide(output);
+                output.Footprints = footprints;
+                output.RunMilliseconds = elapsed.Elapsed.TotalMilliseconds;
+                return output;
+            }
             EngineGroup[] banks = Array.Empty<EngineGroup>();
             bool usePreferred = !returnOnly && input.MaxDeltaV == 0 &&
                 input.PreferredGlideAoa >= input.MinimumAoa && input.PreferredGlideAoa <= input.MaximumAoa &&
@@ -520,8 +531,7 @@ namespace LandingPoc
             FootprintAtmosphere entryAir = EntryAtmosphere(controller.EntryTiltDegrees);
             footprints++;
             if (screen) screenedFootprints++;
-            var glide = new FootprintGlideSteering(roll, input.GlideRollRate, input.CurrentGlideBank, aoa,
-                input.CurrentGlideDirection, settings.AttitudeResponseSeconds);
+            var glide = GlideSteering(aoa, roll);
             bool saveGlideStart = !screen && !returnOnly && input.Settings.OptimizeRecoveryTrajectory && trial.Engines != 0;
             var landing = controller.CaptureFootprint(flight, atmosphere, input.Radius, glide, entryAir,
                 screen, saveGlideStart, returnOnly)(stop);

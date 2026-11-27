@@ -44,32 +44,33 @@ namespace KspRetroLanding
         private Texture2D ring, disk, diamond, rim;
         private GUIStyle nozzleText;
 
-        internal void Draw(Vessel active, IList<EngineBinding> controlled, long command)
+        internal void Draw(Vessel active, IList<EngineBinding> controlled, long command, LandingPanelLayout layout, GUIStyle label)
         {
             if (Event.current.type == EventType.Layout)
                 Capture(active, controlled, command);
 
-            GUILayout.BeginHorizontal();
-            GUILayout.BeginVertical();
-            GUILayout.Label("Engine bay  |  Aft view");
-            float size = Mathf.Clamp(Screen.height - 440, 168, 276);
-            Rect plot = GUILayoutUtility.GetRect(size, size, GUILayout.ExpandWidth(false));
+            if (layout.StackEngineBay) GUILayout.BeginVertical();
+            else GUILayout.BeginHorizontal();
+            GUILayout.BeginVertical(GUILayout.Width(layout.PlotSize), GUILayout.ExpandWidth(false));
+            GUILayout.Label("Engine bay  |  Aft view", label);
+            Rect plot = GUILayoutUtility.GetRect(layout.PlotSize, layout.PlotSize, GUILayout.ExpandWidth(false));
             DrawPlot(plot);
-            GUILayout.Label("● On    ○ Off    ◇ Thrust center");
+            GUILayout.Label("● On    ○ Off    ◇ Thrust center", label);
             GUILayout.EndVertical();
 
-            GUILayout.BeginVertical(GUILayout.MinWidth(138));
-            GUILayout.Label("Producing  " + producing + " / " + readings.Count);
-            GUILayout.Label("Thrust  " + totalThrust.ToString("N1", CultureInfo.InvariantCulture) + " kN");
-            GUILayout.Label("Commanded  " + commanded);
+            GUILayout.BeginVertical(GUILayout.Width(layout.ReadoutWidth), GUILayout.ExpandWidth(false));
+            GUILayout.Label("Producing  " + producing + " / " + readings.Count, label);
+            GUILayout.Label("Thrust  " + totalThrust.ToString("N1", CultureInfo.InvariantCulture) + " kN", label);
+            GUILayout.Label("Commanded  " + commanded, label);
             GUILayout.Space(8);
             int inspected = readings.FindIndex(e => e.Engine == selected);
             EngineReading engine = inspected >= 0 ? readings[inspected] : default;
-            GUILayout.Label(inspected >= 0 ? "Engine " + engine.Label + (engine.On ? "  |  On" : "  |  Off") : "Engine  —");
-            GUILayout.Label(inspected >= 0 ? engine.Thrust.ToString("N1", CultureInfo.InvariantCulture) + " kN" : "—");
-            GUILayout.Label(inspected >= 0 && engine.Commanded ? "Selected for firing" : " ");
+            GUILayout.Label(inspected >= 0 ? "Engine " + engine.Label + (engine.On ? "  |  On" : "  |  Off") : "Engine  —", label);
+            GUILayout.Label(inspected >= 0 ? engine.Thrust.ToString("N1", CultureInfo.InvariantCulture) + " kN" : "—", label);
+            GUILayout.Label(inspected >= 0 && engine.Commanded ? "Selected for firing" : " ", label);
             GUILayout.EndVertical();
-            GUILayout.EndHorizontal();
+            if (layout.StackEngineBay) GUILayout.EndVertical();
+            else GUILayout.EndHorizontal();
         }
 
         private void Capture(Vessel active, IList<EngineBinding> controlled, long command)

@@ -32,6 +32,9 @@ namespace KspRetroLanding
             internal double NextFallbackAttempt;
             internal double TrimMinimum, TrimMeasurement = double.NaN, ReferencePositionError, ReferenceVelocityError;
             internal double CorrectionAt, LastSearchMilliseconds;
+            internal double GlideBankObservedAt = double.NaN, GlideBankObserved;
+            internal double HeldGlideMiss = double.NaN;
+            internal string GlideDecision;
             internal double FirstActivationAt = double.NaN, FirstActivationAngle = double.NaN;
             internal double FirstThrustAt = double.NaN, FirstBodyAngle = double.NaN, FirstThrustAngle = double.NaN;
             internal int LastSearchTraces;
@@ -399,6 +402,7 @@ namespace KspRetroLanding
                 active.BoostAero = default;
                 active.NextSearch = active.GlideSamplesDeadline = active.AeroDeadline = active.RefreshBoostAero = 0;
                 active.AeroRequest = TargetedSearch.None;
+                active.GlideBankObservedAt = double.NaN;
             }
 
             ReadTargetedSearch(active, flight, now);
@@ -776,6 +780,8 @@ namespace KspRetroLanding
 
             if (!UsesCoastAttitude(lastPhase, cfg.IgnitionAltitudeBlocked(flight.Height))) return;
             double tolerance = TargetedLandingGuidance.GlideTolerance(flight.SeaLevelAltitude, active.Height, cfg);
+            active.GlideDecision = plan.GlideDecision;
+            active.HeldGlideMiss = plan.HeldGlideMiss;
             if (plan.GlideApproach?.Safe != true)
             {
                 active.Warning = "No safe targeted glide found yet. Rechecking during descent.";
@@ -847,9 +853,22 @@ namespace KspRetroLanding
             double isp = cfg.SpecificImpulse;
             foreach (Engine engine in specs) isp = Math.Max(isp, engine.SpecificImpulse);
             double currentGlideBank = 0;
+            double currentGlideBankRate = double.NaN;
             AttitudeVector currentGlideDirection = default;
-            if (search == TargetedSearch.Glide)
+            bool trackLiveGlide = search == TargetedSearch.Glide && flight.SeaLevelAltitude < cfg.EntryBurnAltitude &&
+                flight.Vz <= 0 && !active.WaitingForEntry;
+            if (trackLiveGlide)
+            {
                 MeasureGlideAttitude(velocity, up, out currentGlideBank, out currentGlideDirection);
+                if (currentGlideDirection.Length > 0.5)
+                {
+                    double interval = now - active.GlideBankObservedAt;
+                    if (interval > 0 && interval <= 2 * cfg.AttitudeResponseSeconds)
+                        currentGlideBankRate = AttitudeGuidance.WrapDegrees(currentGlideBank - active.GlideBankObserved) / interval;
+                    active.GlideBankObservedAt = now;
+                    active.GlideBankObserved = currentGlideBank;
+                }
+            }
             var input = new BoostbackPreviewInput
             {
                 Flight = flight, Engines = specs, Settings = cfg.Copy(), BackupTorque = BackupTorque(),
@@ -872,7 +891,10 @@ namespace KspRetroLanding
                 EntryNoseDownAtmosphere = nominal.WithPitchSample(active.Samples[4]),
                 EntryNoseUpAtmosphere = nominal.WithPitchSample(active.Samples[5]),
                 CurrentGlideBank = currentGlideBank,
-                CurrentGlideDirection = flight.SeaLevelAltitude < cfg.EntryBurnAltitude && flight.Vz <= 0 ? currentGlideDirection : default,
+                CurrentGlideDirection = currentGlideDirection,
+                TrackLiveGlide = trackLiveGlide,
+                CurrentGlideBankRate = currentGlideBankRate,
+                GlideTimeAvailable = trackLiveGlide ? embeddedFlight?.IgnitionWait ?? double.NaN : double.NaN,
                 PreferredGlideAoa = active.Glide?.PitchAoa ?? double.NaN,
                 PreferredGlideBank = active.Glide?.GlideBank ?? 0
             };
