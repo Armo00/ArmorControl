@@ -190,6 +190,41 @@ namespace LandingPoc
             }, TaskScheduler.Default);
         }
 
+        internal bool TryFallbackBoostbackBanks(Flight flight, out long main, out long precision, out long landing)
+        {
+            main = precision = landing = 0;
+            UpdateGroupAvailability(flight);
+            StartCatalogSearch();
+            AcceptCatalogBatch();
+            List<Group> candidates = groups;
+            double best = 0;
+            long finalStarts = 0;
+            for (int i = 0; i < specs.Length; i++)
+                if (specs[i].Ignitions == 1) finalStarts |= 1L << i;
+            foreach (Group bank in candidates)
+            {
+                if (!TryBoostbackLimits(bank.Mask, flight, out _, out double maximum) || maximum < best) continue;
+                if (maximum == best && main != 0 && CompareGroups(bank, LiveGroup(main)) >= 0) continue;
+                Group inner = null, reserve = null;
+                foreach (Group option in terminalGroups)
+                {
+                    if (inner == null && Subset(option.Mask, bank.Mask) && TryBoostbackLimits(option.Mask, flight, out _, out _))
+                        inner = option;
+                    if (reserve == null && (option.Mask & bank.Mask & finalStarts) == 0 &&
+                        (option.Mask & fixedEngines) == 0 && Eligible(option, flight) &&
+                        Limit(option, flight, true) > flight.Mass * cfg.Gravity)
+                        reserve = option;
+                    if (inner != null && reserve != null) break;
+                }
+                if (inner == null || reserve == null) continue;
+                main = bank.Mask;
+                precision = inner.Mask;
+                landing = reserve.Mask;
+                best = maximum;
+            }
+            return main != 0;
+        }
+
         private void PrepareNeighbors(long active)
         {
             if (active == 0 || active == neighborOf) return;

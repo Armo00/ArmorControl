@@ -6,6 +6,8 @@ using UnityEngine;
 
 namespace KspRetroLanding
 {
+    internal enum FarSampleStatus { None, Ready, Unavailable, FrameBudget, NoAir, Slow, VoxelPending, InvalidForce, Error }
+
     internal sealed class FarCoastPrediction
     {
         private delegate void CalculateForces(Vessel vessel, out Vector3 force, out Vector3 torque,
@@ -165,14 +167,22 @@ namespace KspRetroLanding
 
         internal bool TryFootprintAero(Vessel vessel, Transform frame, Vector3d velocity, Vector3d up,
                                        Vector3d pointing, double altitude, double pressure, out FootprintAero coefficients, Vector3d? dorsal = null)
+            => TryFootprintAero(vessel, frame, velocity, up, pointing, altitude, pressure, out coefficients, out _, dorsal);
+
+        internal bool TryFootprintAero(Vessel vessel, Transform frame, Vector3d velocity, Vector3d up,
+                                       Vector3d pointing, double altitude, double pressure, out FootprintAero coefficients,
+                                       out FarSampleStatus status, Vector3d? dorsal = null)
         {
             coefficients = default;
             int frameId = Time.frameCount;
-            if (!CanSampleFootprint || footprintFrame == frameId || (sampledFrame == frameId && spareSamples == 0) ||
-                pressure <= 0 || velocity.sqrMagnitude < 4 || !voxelizationValid(vessel)) return false;
-            footprintFrame = frameId;
+            status = !CanSampleFootprint ? FarSampleStatus.Unavailable :
+                footprintFrame == frameId || (sampledFrame == frameId && spareSamples == 0) ? FarSampleStatus.FrameBudget :
+                pressure <= 0 ? FarSampleStatus.NoAir : velocity.sqrMagnitude < 4 ? FarSampleStatus.Slow : FarSampleStatus.Ready;
+            if (status != FarSampleStatus.Ready) return false;
             try
             {
+                if (!voxelizationValid(vessel)) { status = FarSampleStatus.VoxelPending; return false; }
+                footprintFrame = frameId;
                 Quaternion pose = dorsal.HasValue ?
                     Quaternion.LookRotation((Vector3)dorsal.Value, (Vector3)pointing) *
                         Quaternion.Inverse(Quaternion.LookRotation(-frame.forward, frame.up)) :
@@ -187,12 +197,14 @@ namespace KspRetroLanding
                 double upForce = Vector3d.Dot(aero, lift) / q;
                 double sideForce = Vector3d.Dot(aero, cross) / q;
                 if (!FootprintAtmosphere.Finite(drag) || drag < 0 ||
-                    !FootprintAtmosphere.Finite(upForce) || !FootprintAtmosphere.Finite(sideForce)) return false;
+                    !FootprintAtmosphere.Finite(upForce) || !FootprintAtmosphere.Finite(sideForce))
+                { status = FarSampleStatus.InvalidForce; return false; }
                 coefficients = new FootprintAero(drag, upForce, sideForce, true);
                 return true;
             }
             catch (Exception ex)
             {
+                status = FarSampleStatus.Error;
                 Debug.LogWarning("[RetroLanding] Touchdown aero sample failed: " + ex.Message);
                 return false;
             }

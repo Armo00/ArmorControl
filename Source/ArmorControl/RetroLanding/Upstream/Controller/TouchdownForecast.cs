@@ -22,11 +22,56 @@ namespace LandingPoc
     internal readonly struct FootprintGlideSteering
     {
         internal readonly double BankDegrees, RollSeconds;
+        private readonly AttitudeVector observedDirection, desiredDirection;
+        private readonly double pointingError, pointingSeconds;
+        internal readonly bool UsesMeasuredPose;
 
-        internal FootprintGlideSteering(double bankDegrees, double rollRate, double currentBank = 0)
+        internal FootprintGlideSteering(double bankDegrees, double rollRate, double currentBank = 0,
+                                        double desiredAoa = 0, AttitudeVector currentDirection = default, double responseSeconds = 0)
         {
             BankDegrees = bankDegrees;
             RollSeconds = Math.Abs(AttitudeGuidance.WrapDegrees(bankDegrees - currentBank)) / rollRate;
+            UsesMeasuredPose = currentDirection.Length > 0.5;
+            observedDirection = desiredDirection = default;
+            pointingError = pointingSeconds = 0;
+            if (!UsesMeasuredPose) return;
+
+            observedDirection = currentDirection.Unit;
+            double toBank = bankDegrees * AttitudeGuidance.Degree;
+            double toPitch = desiredAoa * AttitudeGuidance.Degree;
+            desiredDirection = new AttitudeVector(Math.Cos(toPitch), Math.Sin(toPitch) * Math.Cos(toBank),
+                Math.Sin(toPitch) * Math.Sin(toBank));
+            pointingError = Math.Acos(Math.Max(-1, Math.Min(1, observedDirection.Dot(desiredDirection))));
+            pointingSeconds = Math.Max(responseSeconds, pointingError / (AttitudeGuidance.Degree * rollRate));
+        }
+
+        internal double RollRateFraction(double elapsed) => !UsesMeasuredPose || elapsed >= pointingSeconds ? 1 :
+            AttitudeGuidance.GlideRollPointingWeight(pointingError * (1 - elapsed / pointingSeconds));
+
+        internal void Pose(double elapsed, double rollElapsed, double desiredAoa, out double bank, out double pitchFraction)
+        {
+            bank = BankDegrees;
+            pitchFraction = 0;
+            if (desiredAoa == 0) return;
+            if (!UsesMeasuredPose)
+            {
+                if (rollElapsed + 1e-8 >= RollSeconds) pitchFraction = 1;
+                return;
+            }
+            if (elapsed >= pointingSeconds)
+            {
+                pitchFraction = 1;
+                return;
+            }
+
+            // Follow the nose even while body roll is waiting for authority.
+            // Use the sampled AoA for the force magnitude and rotate lift into
+            // the plane of the transient nose direction.
+            var nose = observedDirection + (desiredDirection - observedDirection) * (elapsed / pointingSeconds);
+            int sign = Math.Sign(desiredAoa);
+            bank = Math.Atan2(sign * nose.Z, sign * nose.Y) / AttitudeGuidance.Degree;
+            double transverse = Math.Sqrt(nose.Y * nose.Y + nose.Z * nose.Z);
+            pitchFraction = Math.Min(1, Math.Atan2(transverse, nose.X) / Math.Abs(desiredAoa * AttitudeGuidance.Degree));
         }
     }
 
@@ -122,6 +167,20 @@ namespace LandingPoc
             return Finite(along) && Finite(up) && Finite(cross);
         }
 
+        internal bool AccelerationWithPitchFraction(double altitude, double horizontal, double vertical, double mass,
+            double pitchFraction, double bankDegrees, out double along, out double up, out double cross)
+        {
+            if (!Acceleration(altitude, horizontal, vertical, mass, pitchFraction > 0,
+                out along, out up, out cross, bankDegrees)) return false;
+            if (pitchFraction <= 0 || pitchFraction >= 1) return true;
+            if (!Acceleration(altitude, horizontal, vertical, mass, false,
+                out double baseAlong, out double baseUp, out double baseCross)) return false;
+            along = baseAlong + pitchFraction * (along - baseAlong);
+            up = baseUp + pitchFraction * (up - baseUp);
+            cross = baseCross + pitchFraction * (cross - baseCross);
+            return true;
+        }
+
         internal static bool Finite(double x) => !double.IsNaN(x) && !double.IsInfinity(x);
     }
 
@@ -148,7 +207,8 @@ namespace LandingPoc
 
         internal Func<CancellationToken, TouchdownEstimate> CaptureFootprint(
             Flight flight, FootprintAtmosphere atmosphere, double radius, FootprintGlideSteering glide = default,
-            FootprintAtmosphere entryAtmosphere = null, bool screenOnly = false, bool captureGlide = false)
+            FootprintAtmosphere entryAtmosphere = null, bool screenOnly = false, bool captureGlide = false,
+            bool returnOnly = false)
         {
             Engine[] engines = (Engine[])specs.Clone();
             Settings settings = cfg.Copy();
@@ -189,13 +249,14 @@ namespace LandingPoc
                 if (currentBank != 0) clone.cachedMasks.Add(currentBank);
                 if (currentPlan.Main != null) clone.cachedMasks.Add(currentPlan.Main.Mask);
                 if (currentPlan.Final != null) clone.cachedMasks.Add(currentPlan.Final.Mask);
-                return clone.TraceFootprint(flight, atmosphere, radius, glide, entryAtmosphere, screenOnly, captureGlide, stop);
+                return clone.TraceFootprint(flight, atmosphere, radius, glide, entryAtmosphere,
+                    screenOnly || returnOnly, captureGlide, stop, returnOnly);
             };
         }
 
         private TouchdownEstimate TraceFootprint(Flight s, FootprintAtmosphere air, double radius,
                                                 FootprintGlideSteering glide, FootprintAtmosphere entryAir,
-                                                bool screenOnly, bool captureGlide, CancellationToken stop)
+                                                bool screenOnly, bool captureGlide, CancellationToken stop, bool returnOnly = false)
         {
             var result = new TouchdownEstimate { Status = "no_plan", UsesFar = air.UsesFar, Atmospheric = air.IsAtmospheric };
             if (s.SolidBurnActive || s.Contact || phase == Phase.Yolo || s.Mass <= 0 || radius <= 0)
@@ -209,7 +270,10 @@ namespace LandingPoc
             double thrustX = s.LateralThrustAcceleration, thrustUp = s.VerticalThrustAcceleration;
             double pitch = Math.Atan2(thrustX, Math.Max(0.01, thrustUp));
             double nextAero = 0;
+            double glideElapsed = 0;
+            double glideRollElapsed = 0;
             bool previouslyRolling = false;
+            bool entryRequired = phase == Phase.EntryBurn;
             var start = new FootprintIgnition(specs, s);
             var watch = Stopwatch.StartNew();
 
@@ -235,15 +299,18 @@ namespace LandingPoc
                 bool coasting = phase == Phase.Coast;
                 bool entryCrossing = coasting && previousEntryAltitude > cfg.EntryBurnAltitude &&
                     s.SeaLevelAltitude <= cfg.EntryBurnAltitude && s.Vz < 0 && s.SurfaceSpeed > cfg.EntryBurnSpeed;
+                entryRequired |= entryCrossing;
                 bool glideWindow = coasting && !entryCrossing && s.SeaLevelAltitude < cfg.EntryBurnAltitude;
-                bool rolling = glideWindow && result.GlideRollSeconds + 1e-8 < glide.RollSeconds;
+                bool rolling = glideWindow && glideRollElapsed + 1e-8 < glide.RollSeconds;
                 if (rolling != previouslyRolling) nextAero = 0;
                 previouslyRolling = rolling;
-                bool pitched = glideWindow && !rolling && cfg.CoastPitchAoaDegrees != 0;
+                glide.Pose(glideElapsed, glideRollElapsed, glideWindow ? cfg.CoastPitchAoaDegrees : 0,
+                    out double glideBank, out double pitchFraction);
+                bool pitched = pitchFraction > 0;
                 bool tiltedEntry = entryAir != null && (entryCrossing || phase == Phase.EntryBurn) && horizontal >= 1;
                 var currentAir = tiltedEntry ? entryAir : air;
-                if (!currentAir.Acceleration(s.SeaLevelAltitude, horizontal, s.Vz, s.Mass, pitched || tiltedEntry,
-                    out double aeroX, out double aeroUp, out double aeroCross, tiltedEntry ? 0 : glide.BankDegrees))
+                if (!currentAir.AccelerationWithPitchFraction(s.SeaLevelAltitude, horizontal, s.Vz, s.Mass,
+                    tiltedEntry ? 1 : pitchFraction, tiltedEntry ? 0 : glideBank, out double aeroX, out double aeroUp, out double aeroCross))
                 {
                     result.Status = "waiting_aero";
                     return result;
@@ -283,14 +350,16 @@ namespace LandingPoc
                     !(previousEntryAltitude > cfg.EntryBurnAltitude && s.SeaLevelAltitude <= cfg.EntryBurnAltitude);
                 if (coasting)
                 {
-                    s.AlignmentSeconds = rolling ? 0 : Math.Abs(cfg.CoastPitchAoaAt(s.SeaLevelAltitude)) / 20;
+                    double alignmentFraction = glide.UsesMeasuredPose ? pitchFraction : rolling ? 0 : 1;
+                    s.AlignmentSeconds = Math.Abs(cfg.CoastPitchAoaAt(s.SeaLevelAltitude) * alignmentFraction) / 20;
                     if (!skipPlanning && !screenOnly && air.IsAtmospheric && result.Seconds >= nextAero)
                     {
                         double mass = s.Mass;
                         s.AeroForecast = AeroCoastForecast.Integrate(s, cfg.Gravity,
                             (double h, double x, double z, out double sampleX, out double sampleUp) =>
-                                air.Acceleration(ground + h, x, z, mass, !rolling && cfg.CoastPitchAoaAt(ground + h) != 0,
-                                    out sampleX, out sampleUp, out _, glide.BankDegrees), 20);
+                                air.AccelerationWithPitchFraction(ground + h, x, z, mass,
+                                    cfg.CoastPitchAoaAt(ground + h) == 0 ? 0 : alignmentFraction, glideBank,
+                                    out sampleX, out sampleUp, out _), 20);
                         nextAero = result.Seconds + 1;
                         s.AeroForecastAge = 0;
                     }
@@ -365,7 +434,15 @@ namespace LandingPoc
                 s.Height = nextHeight;
                 result.Seconds += elapsed;
                 s.AeroForecastAge += elapsed;
-                if (command.Phase == Phase.Coast && rolling) result.GlideRollSeconds += elapsed;
+                if (command.Phase == Phase.Coast && glideWindow)
+                {
+                    if (rolling)
+                    {
+                        glideRollElapsed += elapsed * glide.RollRateFraction(glideElapsed + elapsed / 2);
+                        result.GlideRollSeconds += elapsed;
+                    }
+                    glideElapsed += elapsed;
+                }
                 if (command.Phase == Phase.Coast && pitched) result.GlidePitchSeconds += elapsed;
                 if (bank != null)
                 {
@@ -387,7 +464,7 @@ namespace LandingPoc
                     if (screenOnly)
                     {
                         // The cheap pass ranks glide endpoints. It never certifies a landing.
-                        result.HasPoint = result.EntryCompleted;
+                        result.HasPoint = result.EntryCompleted || (returnOnly && !entryRequired);
                         result.Status = "screened";
                         result.TouchdownMass = s.Mass;
                         return result;

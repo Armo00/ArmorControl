@@ -29,6 +29,7 @@ namespace KspRetroLanding
             internal readonly float[] Refresh = new float[6];
             internal LandingTuning Tuning;
             internal double CapturedAt, Delivered, DeliveredMagnitude, BoostDeadline;
+            internal double NextFallbackAttempt;
             internal double TrimMinimum, TrimMeasurement = double.NaN, ReferencePositionError, ReferenceVelocityError;
             internal double CorrectionAt, LastSearchMilliseconds;
             internal double FirstActivationAt = double.NaN, FirstActivationAngle = double.NaN;
@@ -42,6 +43,9 @@ namespace KspRetroLanding
             internal BoostbackCutoffTrend CutoffTrend;
             internal BoostbackStage BoostStage;
             internal float NextSearch, GlideSamplesDeadline, AeroDeadline;
+            internal TargetedSearch AeroRequest;
+            internal FarSampleStatus AeroSampleStatus;
+            internal int AeroBudgetDenied, AeroVoxelPending, AeroInvalid;
             internal float NextBoostbackRetry = float.PositiveInfinity;
             internal double LastBoostbackPlanAt = double.NaN;
             internal string LastBoostbackRejection;
@@ -52,6 +56,8 @@ namespace KspRetroLanding
             internal float RefreshBoostAero;
             internal string Warning;
             internal BoostbackApproach Boost, Glide, Cutoff;
+            internal BoostbackFallback Fallback;
+            internal BoostbackPrediction Prediction;
         }
 
         private TargetedRecovery targeted;
@@ -200,7 +206,12 @@ namespace KspRetroLanding
             {
                 active.LastBoostbackPlan = null;
                 active.LastBoostbackPlanAt = now;
-                DeferBoostbackPlan(active, reason, warning);
+                if (active.Leg == TargetedLeg.Boostback)
+                {
+                    active.LastBoostbackRejection = reason;
+                    active.NextSearch = Time.realtimeSinceStartup + 0.5f;
+                }
+                else DeferBoostbackPlan(active, reason, warning);
             }
             else RetryTargetedGlide(active, warning);
         }
@@ -229,7 +240,8 @@ namespace KspRetroLanding
             Warning = targeted.Warning,
             Pitch = targeted.Glide?.PitchAoa ?? double.NaN,
             Bank = targeted.Glide?.GlideBank ?? double.NaN,
-            BoostRemaining = targeted.Boost == null ? double.NaN : Math.Max(0, targeted.Boost.DeltaV - targeted.Delivered)
+            BoostRemaining = targeted.Fallback?.Remaining ?? (targeted.Boost == null ? double.NaN :
+                Math.Max(0, targeted.Boost.DeltaV - targeted.Delivered))
         };
 
         private bool TryTargetedTouchdown(Command command, out RetroTouchdown snapshot)
@@ -239,7 +251,14 @@ namespace KspRetroLanding
             if (active == null || command.Phase == Phase.Landed) return false;
             BoostbackApproach estimate = null;
             if (active.Leg == TargetedLeg.Planning || active.Leg == TargetedLeg.Boostback || active.Leg == TargetedLeg.Cutoff)
+            {
+                if (active.Fallback != null && active.Cutoff == null)
+                {
+                    snapshot = new RetroTouchdown { Status = "boostback_coarse", Waypoint = active.Name };
+                    return true;
+                }
                 estimate = active.Cutoff ?? active.Boost;
+            }
             else if (command.Phase == Phase.Coast && !active.StandardFallback && !active.WaitingForEntry)
                 estimate = active.Glide;
             if (estimate == null)
@@ -269,13 +288,6 @@ namespace KspRetroLanding
 
             double bank = targeted.Glide?.GlideBank ?? 0;
             aoa = targeted.Glide?.PitchAoa ?? cfg.CoastPitchAoaDegrees;
-            AttitudeGuidance.BankedCoastPointing(retrograde, up, north, bank, 0, out AttitudeVector bankReference);
-            double error = AttitudeGuidance.RollError(AttitudeCoordinates(frame.up), AttitudeCoordinates(-frame.forward),
-                retrograde, bankReference);
-            double rate = vessel.rootPart.rb == null ? 0 : Math.Abs(Vector3.Dot(vessel.rootPart.rb.angularVelocity, frame.up));
-            if (Math.Abs(error) > Settings.IgnitionToleranceDegrees * AttitudeGuidance.Degree / 2 ||
-                rate > AttitudeGuidance.ReferenceRollRate / 4)
-                aoa = 0;
             direction = WorldDirection(AttitudeGuidance.BankedCoastPointing(retrograde, up, north, bank, aoa, out forward));
             return true;
         }
@@ -386,6 +398,7 @@ namespace KspRetroLanding
                 active.UseJointPlan = false;
                 active.BoostAero = default;
                 active.NextSearch = active.GlideSamplesDeadline = active.AeroDeadline = active.RefreshBoostAero = 0;
+                active.AeroRequest = TargetedSearch.None;
             }
 
             ReadTargetedSearch(active, flight, now);
@@ -401,8 +414,9 @@ namespace KspRetroLanding
                     if (retryBoostback) RequestBoostbackUllage(active);
                     ScheduleTargetedSearch(active, retryBoostback ? TargetedSearch.Boostback : TargetedSearch.Glide,
                         flight, up, velocity, now);
+                    if (retryBoostback) TryBeginFallbackBoostback(active, flight, up, velocity, now);
                 }
-                return false;
+                if (active.Leg == TargetedLeg.Recovery) return false;
             }
 
             controller.ObserveBoostbackAltitude(flight.SeaLevelAltitude);
@@ -425,11 +439,14 @@ namespace KspRetroLanding
                 }
                 RequestBoostbackUllage(active);
                 ScheduleTargetedSearch(active, TargetedSearch.Boostback, flight, up, velocity, now);
-                if (active.Leg == TargetedLeg.Recovery) return false;
-                direction = RoughBoostbackDirection(active, flight, up, velocity);
-                command = new Command { Phase = Phase.Boostback, PrepareBoostbackUllage = true,
-                    Reason = "Planning Boostback, aligning and preparing ullage" };
-                return true;
+                if (!TryBeginFallbackBoostback(active, flight, up, velocity, now))
+                {
+                    if (active.Leg == TargetedLeg.Recovery) return false;
+                    direction = RoughBoostbackDirection(active, flight, up, velocity);
+                    command = new Command { Phase = Phase.Boostback, PrepareBoostbackUllage = true,
+                        Reason = "Planning Boostback, aligning and preparing ullage" };
+                    return true;
+                }
             }
 
             if (active.Leg == TargetedLeg.Boostback && !active.BoostIgnitionCommitted)
@@ -442,16 +459,42 @@ namespace KspRetroLanding
 
             if (active.Leg == TargetedLeg.Boostback)
             {
-                direction = BoostbackDirection(active, up);
                 var correction = FreshBoostbackCorrection(active, now);
+                var fallback = active.Fallback;
+                bool returnOnly = active.Boost.ReturnOnly;
+                bool coarse = fallback != null && !HasBoostbackPrediction(correction);
+                if (fallback != null)
+                {
+                    UpdateFallbackEstimate(active, flight, up, velocity, now);
+                    SetBoostbackPrediction(active, PredictionSource(correction, fallback.Source));
+                }
+                else if (returnOnly)
+                    SetBoostbackPrediction(active, PredictionSource(correction, BoostbackPrediction.FarReturn));
+                if (fallback != null || returnOnly)
+                {
+                    if (active.BoostCommandMask != 0 && active.Search == TargetedSearch.Boostback)
+                    {
+                        CancelTargetedSearch(active);
+                        active.NextSearch = 0;
+                    }
+                }
+                direction = BoostbackDirection(active, up);
+                if (direction.sqrMagnitude == 0) direction = active.LastBoostDirection.sqrMagnitude > 0 ? active.LastBoostDirection : up;
                 UpdateBoostbackReference(active, correction, flight, up, velocity, now);
                 var estimate = correction?.CutNow;
                 if (active.UseJointPlan && estimate != null && !estimate.Touchdown.EntryCompleted) estimate = null;
+                bool finishVerifiedHold = estimate?.ReturnOnly == true && active.BoostStage == BoostbackStage.Fine &&
+                    correction.Mask == active.BoostCommandMask && now < active.CorrectionAt + correction.HoldSeconds &&
+                    VerifiedReleaseMatches(active, correction);
 
-                string cutoff = active.BoostIgnitionCommitted
-                    ? TargetedLandingGuidance.BoostbackCutoffReason(active.DeliveredMagnitude, active.Boost.BoostThrustDeltaV,
-                        estimate, active.CorrectionAt, ref active.CutoffTrend)
-                    : null;
+                string cutoff = coarse ? CoarseBoostbackCutoff(active) : null;
+                if (active.BoostIgnitionCommitted)
+                {
+                    if (BoostbackImpulseRemaining(active) <= 0) cutoff = "impulse_limit";
+                    else if (!coarse && !finishVerifiedHold) cutoff = TargetedLandingGuidance.BoostbackCutoffReason(active.DeliveredMagnitude,
+                        fallback == null ? active.Boost.BoostThrustDeltaV : 0, estimate,
+                        active.CorrectionAt, ref active.CutoffTrend);
+                }
                 if (cutoff != null) BeginBoostbackCutoff(active, cutoff);
                 else if (active.BoostStage == BoostbackStage.Fine && correction?.AfterCorrection != null &&
                     now >= active.CorrectionAt + correction.HoldSeconds && VerifiedReleaseMatches(active, correction))
@@ -468,11 +511,16 @@ namespace KspRetroLanding
                 }
                 else if (TryBoostbackBank(active, flight, now, up, estimate, correction, ref direction, out command))
                 {
-                    if ((active.BoostStage == BoostbackStage.Full || active.BoostStage == BoostbackStage.Fine) &&
-                        command.Engines != 0 && (flight.EstablishedThrust & command.Engines) == command.Engines &&
-                        active.Work == null && Time.realtimeSinceStartup >= active.NextSearch)
-                        ScheduleTargetedSearch(active, TargetedSearch.Cutoff, flight, up, velocity, now,
-                            CaptureBoostbackCorrection(active, flight, up, direction, command));
+                    if (command.Engines == 0 && (fallback != null || returnOnly && cfg.OptimizeRecoveryTrajectory))
+                        ScheduleTargetedSearch(active, TargetedSearch.Boostback, flight, up, velocity, now);
+                    else if (command.Engines != 0 && (fallback != null || returnOnly ||
+                        (active.BoostStage == BoostbackStage.Full || active.BoostStage == BoostbackStage.Fine) &&
+                        (flight.EstablishedThrust & command.Engines) == command.Engines) && active.Work == null &&
+                        Time.realtimeSinceStartup >= active.NextSearch)
+                    {
+                        var live = CaptureBoostbackCorrection(active, flight, up, direction, command);
+                        if (live != null) ScheduleTargetedSearch(active, TargetedSearch.Cutoff, flight, up, velocity, now, live);
+                    }
                     return true;
                 }
                 else
@@ -498,7 +546,9 @@ namespace KspRetroLanding
         {
             command = default;
             long precision = active.Boost.PrecisionEngines;
-            double remaining = Math.Max(0, active.Boost.DeltaV - active.Delivered);
+            var fallback = active.Fallback;
+            bool coarse = fallback != null && !HasBoostbackPrediction(correction);
+            double remaining = fallback?.Remaining ?? Math.Max(0, active.Boost.DeltaV - active.Delivered);
             if (!controller.TryBoostbackLimits(precision, flight, out double latestMinimum, out double trimMaximum))
                 return false;
             if (active.TrimMeasurement != nextThrust)
@@ -508,10 +558,14 @@ namespace KspRetroLanding
             }
             double angle = Vector3.Angle(frame.up, (Vector3)direction);
             var previous = active.BoostStage;
+            double miss = TargetedLandingGuidance.CanGuideBoostback(estimate) ? estimate.MissDistance : double.PositiveInfinity;
+            if (coarse) miss = fallback.Miss;
             var stage = TargetedLandingGuidance.BoostbackStageFor(previous, angle,
                 precision != 0 && (flight.EstablishedThrust & precision) == precision,
-                remaining, estimate != null && estimate.Safe ? estimate.MissDistance : double.PositiveInfinity,
+                fallback != null && !coarse && estimate?.Safe == true ? double.PositiveInfinity : remaining, miss,
                 trimMaximum / flight.Mass, cfg);
+            if (coarse) stage = TargetedLandingGuidance.CoarseBoostbackStage(previous, stage, angle,
+                fallback.SamplesFromSource >= 2, miss, fallback.ImpactSeconds, trimMaximum / flight.Mass, cfg);
             long mask = TargetedLandingGuidance.BoostbackMask(stage, precision, active.Boost.Engines);
             double minimum = active.TrimMinimum, maximum = trimMaximum;
             if (mask != 0 && mask != precision &&
@@ -521,14 +575,28 @@ namespace KspRetroLanding
                 CancelTargetedSearch(active);
                 active.NextSearch = 0;
                 active.Correction = correction = null;
-                double budget = Math.Max(0, active.Boost.BoostThrustDeltaV * TargetedLandingGuidance.BoostbackImpulseLimit -
-                    active.DeliveredMagnitude);
+                double budget = BoostbackImpulseRemaining(active);
                 double nominal = Math.Max(remaining / (trimMaximum / flight.Mass), cfg.AttitudeResponseSeconds);
                 double repairWindow = Math.Min(budget * flight.Mass / Math.Max(1e-3, minimum),
                     Math.Max(nominal, active.Boost.BurnSeconds) * TargetedLandingGuidance.BoostbackImpulseLimit);
                 active.BoostDeadline = Math.Max(active.BoostDeadline, now + repairWindow + cfg.AttitudeResponseSeconds);
             }
-            double thrust = stage == BoostbackStage.Fine ? minimum : maximum;
+            double thrust = stage == BoostbackStage.Fine ? coarse ?
+                remaining * flight.Mass / TargetedLandingGuidance.CorrectionInterval(stage) : minimum : maximum;
+            if (coarse && stage == BoostbackStage.Full && angle > TargetedLandingGuidance.FullBoostbackAngle)
+                thrust = minimum;
+            if (fallback != null && mask != 0)
+            {
+                if (now >= fallback.NextFuelCheck || mask != fallback.LastFuelBank)
+                {
+                    fallback.FuelLimit = active.DeliveredMagnitude + FallbackFuelLimit(active, flight, mask);
+                    fallback.LastFuelBank = mask;
+                    fallback.NextFuelCheck = now + 0.5;
+                }
+                double available = Math.Min(fallback.FuelLimit - active.DeliveredMagnitude, BoostbackImpulseRemaining(active));
+                if (available < minimum / flight.Mass * cfg.SampleSeconds) return false;
+                maximum = Math.Min(maximum, available * flight.Mass / cfg.SampleSeconds);
+            }
             if (mask != 0 && correction?.AfterCorrection != null && correction.Mask == mask && ReferenceMatches(active) &&
                 TargetedLandingGuidance.FollowBoostbackCorrection(stage, now - active.CorrectionAt, correction.HoldSeconds))
             {
@@ -548,6 +616,8 @@ namespace KspRetroLanding
                     stage == BoostbackStage.Fine ? "Boostback fine turn" :
                     active.UseJointPlan ? "Optimized Boostback" : "Targeted Boostback"
             };
+            if (coarse) command.Reason += " (" + fallback.Source + ")";
+            else if (active.Prediction == BoostbackPrediction.FarReturn) command.Reason += " (return trajectory)";
             return true;
         }
 
@@ -621,6 +691,7 @@ namespace KspRetroLanding
             {
                 if (now - active.CapturedAt <= BoostbackCorrectionLifetime(active.BoostStage))
                 {
+                    if ((active.Fallback != null || active.Boost.ReturnOnly) && !HasBoostbackPrediction(plan.Correction)) return;
                     active.Correction = plan.Correction;
                     active.CorrectionAt = active.CapturedAt;
                     active.Cutoff = plan.Correction?.CutNow;
@@ -632,6 +703,7 @@ namespace KspRetroLanding
                 active.LastBoostbackPlan = plan;
                 active.LastBoostbackPlanAt = active.CapturedAt;
                 active.LastBoostbackRejection = null;
+                if (active.BoostCommandMask != 0 || active.BoostIgnitionCommitted) return;
                 if (!TargetedLandingGuidance.MayStartBoostback(flight.Height, flight.Vz, cfg))
                 {
                     active.LastBoostbackRejection = "window_closed";
@@ -650,31 +722,41 @@ namespace KspRetroLanding
                 }
                 if (plan.Status == "no_burn_required")
                 {
+                    active.Boost = null;
+                    active.Fallback = null;
                     active.Leg = TargetedLeg.Recovery;
                     active.NextBoostbackRetry = float.PositiveInfinity;
                     active.NextSearch = 0;
                     active.Warning = null;
                     return;
                 }
-                if ((plan.Status != "planned" && plan.Status != "planned_with_trim") || plan.DefaultAoa?.Safe != true ||
-                    plan.DefaultAoa.Engines == 0)
+                bool usable = plan.Status == "return_planned" || plan.Status == "planned" || plan.Status == "planned_with_trim";
+                if (!usable || !TargetedLandingGuidance.CanGuideBoostback(plan.DefaultAoa) || plan.DefaultAoa.Engines == 0)
                 {
-                    DeferBoostbackPlan(active, "no_accepted_plan", "No accepted Boostback trajectory yet. Retrying from the next flight state.");
+                    active.LastBoostbackRejection = "no_accepted_plan";
+                    if (active.Leg != TargetedLeg.Boostback)
+                        DeferBoostbackPlan(active, "no_accepted_plan", "No accepted Boostback trajectory yet. Retrying from the next flight state.");
                     return;
                 }
                 if ((flight.Running | flight.Starting | flight.IssuedStarts) != 0 ||
                     !controller.CanUseBoostbackBank(plan.DefaultAoa.Engines, flight, out _))
                 {
-                    DeferBoostbackPlan(active, "main_bank_unavailable", "Boostback main engine group did not pass the live check. Retrying.");
+                    active.LastBoostbackRejection = "main_bank_unavailable";
+                    if (active.Leg != TargetedLeg.Boostback)
+                        DeferBoostbackPlan(active, "main_bank_unavailable", "Boostback main engine group did not pass the live check. Retrying.");
                     return;
                 }
                 if (!controller.TryBoostbackLimits(plan.DefaultAoa.PrecisionEngines, flight, out double minimum, out _))
                 {
-                    DeferBoostbackPlan(active, "precision_bank_unavailable", "Boostback precision engine group did not pass the live check. Retrying.");
+                    active.LastBoostbackRejection = "precision_bank_unavailable";
+                    if (active.Leg != TargetedLeg.Boostback)
+                        DeferBoostbackPlan(active, "precision_bank_unavailable", "Boostback precision engine group did not pass the live check. Retrying.");
                     return;
                 }
 
                 active.Boost = plan.DefaultAoa;
+                active.Fallback = null;
+                SetBoostbackPrediction(active, active.Boost.ReturnOnly ? BoostbackPrediction.FarReturn : BoostbackPrediction.Far);
                 active.TrimMinimum = minimum;
                 active.TrimMeasurement = nextThrust;
                 active.UseJointPlan = active.Boost.JointPlan;
@@ -716,8 +798,14 @@ namespace KspRetroLanding
             }
             if (active.Body.atmosphere && !farCoast.CanSampleFootprint)
             {
+                active.AeroSampleStatus = FarSampleStatus.Unavailable;
                 TargetedSearchUnavailable(active, search, now, "far_unavailable", "FAR aero samples are unavailable. Retrying.");
                 return;
+            }
+            if (active.AeroRequest != search)
+            {
+                active.AeroRequest = search;
+                active.AeroDeadline = active.GlideSamplesDeadline = 0;
             }
             if (NeedsGlideBounds(active, search) && active.GlideSamplesDeadline == 0)
                 active.GlideSamplesDeadline = realtime + 1;
@@ -727,10 +815,15 @@ namespace KspRetroLanding
                 out FootprintAtmosphere boostbackAtmosphere))
             {
                 if (realtime >= active.AeroDeadline)
+                {
+                    active.AeroDeadline = active.GlideSamplesDeadline = 0;
+                    active.NextSearch = realtime + 0.5f;
                     TargetedSearchUnavailable(active, search, now, "far_sample_timeout", "FAR aero samples were not ready in time. Retrying.");
+                }
                 return;
             }
-            active.AeroDeadline = 0;
+            active.AeroDeadline = active.GlideSamplesDeadline = 0;
+            active.AeroSampleStatus = FarSampleStatus.Ready;
 
             TargetedBasis(up, out Vector3d east, out Vector3d north);
             Engine[] specs = controller.CaptureEngineMeasurements();
@@ -753,6 +846,10 @@ namespace KspRetroLanding
             double dry = Math.Max(0.001, flight.Mass - usable);
             double isp = cfg.SpecificImpulse;
             foreach (Engine engine in specs) isp = Math.Max(isp, engine.SpecificImpulse);
+            double currentGlideBank = 0;
+            AttitudeVector currentGlideDirection = default;
+            if (search == TargetedSearch.Glide)
+                MeasureGlideAttitude(velocity, up, out currentGlideBank, out currentGlideDirection);
             var input = new BoostbackPreviewInput
             {
                 Flight = flight, Engines = specs, Settings = cfg.Copy(), BackupTorque = BackupTorque(),
@@ -774,7 +871,8 @@ namespace KspRetroLanding
                     ? active.Boost.BurnDirections.EntryTilt : 0,
                 EntryNoseDownAtmosphere = nominal.WithPitchSample(active.Samples[4]),
                 EntryNoseUpAtmosphere = nominal.WithPitchSample(active.Samples[5]),
-                CurrentGlideBank = search == TargetedSearch.Glide ? MeasuredGlideBank(velocity, up) : 0,
+                CurrentGlideBank = currentGlideBank,
+                CurrentGlideDirection = flight.SeaLevelAltitude < cfg.EntryBurnAltitude && flight.Vz <= 0 ? currentGlideDirection : default,
                 PreferredGlideAoa = active.Glide?.PitchAoa ?? double.NaN,
                 PreferredGlideBank = active.Glide?.GlideBank ?? 0
             };
@@ -784,21 +882,31 @@ namespace KspRetroLanding
                 ? TargetedLandingGuidance.CorrectionInterval(active.BoostStage) : 1.0);
             active.Cancellation = new CancellationTokenSource();
             CancellationToken token = active.Cancellation.Token;
-            active.Work = Task.Run(() => correction != null ? BoostbackPreview.Correct(input, correction, token) :
-                BoostbackPreview.Plan(input, token, search == TargetedSearch.Glide), token);
+            bool planReturn = search == TargetedSearch.Boostback && active.Boost?.ReturnOnly != true;
+            active.Work = Task.Run(() =>
+            {
+                if (correction != null) return BoostbackPreview.Correct(input, correction, token);
+                if (planReturn) return BoostbackPreview.PlanReturn(input, token);
+                return BoostbackPreview.Plan(input, token, search == TargetedSearch.Glide);
+            }, token);
         }
 
         private static double RotationRate(CelestialBody body) =>
             body.rotates && Math.Abs(body.rotationPeriod) > 1e-6 ? 2 * Math.PI / body.rotationPeriod : 0;
 
-        private double MeasuredGlideBank(Vector3d velocity, Vector3d up)
+        private void MeasureGlideAttitude(Vector3d velocity, Vector3d up, out double bank, out AttitudeVector pointing)
         {
-            if (velocity.sqrMagnitude < 1) return 0;
+            bank = 0;
+            pointing = default;
+            if (velocity.sqrMagnitude < 1) return;
             AttitudeVector retrograde = AttitudeCoordinates(-velocity.normalized);
-            AttitudeGuidance.BankedCoastPointing(retrograde, AttitudeCoordinates(up), LocalNorth(up), 0, 0,
+            AttitudeVector localUp = AttitudeCoordinates(up), north = LocalNorth(up);
+            AttitudeVector axis = AttitudeCoordinates(frame.up);
+            AttitudeGuidance.BankedCoastPointing(retrograde, localUp, north, 0, 0,
                 out AttitudeVector forward);
-            return -AttitudeGuidance.RollError(AttitudeCoordinates(frame.up), AttitudeCoordinates(-frame.forward),
+            bank = -AttitudeGuidance.RollError(axis, AttitudeCoordinates(-frame.forward),
                 retrograde, forward) / AttitudeGuidance.Degree;
+            pointing = new AttitudeVector(axis.Dot(retrograde), axis.Dot(forward), axis.Dot(retrograde.Cross(forward)));
         }
 
         private bool CaptureTargetedAtmosphere(TargetedRecovery active, TargetedSearch search, Flight flight, Vector3d up,
@@ -813,20 +921,11 @@ namespace KspRetroLanding
                 return true;
             }
             double depth = body.atmosphereDepth;
-            if (search == TargetedSearch.Boostback && flight.SeaLevelAltitude < depth && now >= active.RefreshBoostAero)
-            {
-                double altitude = Math.Max(0, flight.SeaLevelAltitude);
-                Vector3d direction = RoughBoostbackDirection(active, flight, up, velocity);
-                if (farCoast.TryFootprintAero(vessel, frame, velocity, up, direction, altitude,
-                    body.GetPressure(altitude), out FootprintAero sample))
-                {
-                    active.BoostAero = sample;
-                    active.RefreshBoostAero = now + 2;
-                }
-            }
-            bool needEntryTrim = search == TargetedSearch.Boostback && cfg.OptimizeRecoveryTrajectory ||
-                search == TargetedSearch.Cutoff && active.UseJointPlan;
+            bool needEntryTrim = NeedsEntryTrim(active, search);
             int required = needEntryTrim ? 6 : NeedsGlideBounds(active, search) ? 4 : 2;
+            // First fill missing samples. A failing refresh of an existing one
+            // must not consume the only slot while a required sample is missing.
+            bool missing = !active.Samples[0].Valid || !active.Samples[1].Valid;
             for (int i = 0; i < required; i++)
             {
                 double pitch = TargetPitch(i);
@@ -840,31 +939,47 @@ namespace KspRetroLanding
                     active.Samples[i] = active.Samples[1];
                     continue;
                 }
-                if (now < active.Refresh[i]) continue;
+                if (now < active.Refresh[i] || missing && (i >= 2 || active.Samples[i].Valid)) continue;
                 double altitude = Math.Min(depth * 0.85, Math.Max(0, flight.SeaLevelAltitude));
                 if (i >= 4) altitude = Math.Min(altitude, cfg.EntryBurnAltitude);
                 else if (i > 0) altitude = Math.Min(altitude, cfg.EntryBurnAltitude * 0.85);
-                if (velocity.sqrMagnitude < 4) return false;
+                if (velocity.sqrMagnitude < 4) { active.AeroSampleStatus = FarSampleStatus.Slow; return false; }
                 var direction = AttitudeGuidance.BankedCoastPointing(AttitudeCoordinates(-velocity.normalized),
                     AttitudeCoordinates(up), LocalNorth(up), 0, pitch, out AttitudeVector forward);
                 if (i >= 4)
                     forward = new AttitudeGuidance().RollForward(direction, AttitudeCoordinates(up),
                         LocalNorth(up), rollDegrees, cfg.SampleSeconds);
                 if (farCoast.TryFootprintAero(vessel, frame, velocity, up, WorldDirection(direction), altitude,
-                    body.GetPressure(altitude), out FootprintAero sample, WorldDirection(forward)))
+                    body.GetPressure(altitude), out FootprintAero sample, out FarSampleStatus status, WorldDirection(forward)))
                 {
                     active.Samples[i] = sample;
                     active.Refresh[i] = now + 2;
                 }
+                else if (i < 2 && !active.Samples[i].Valid) RecordTargetedAeroDenial(active, status);
             }
             if (!active.Samples[0].Valid || !active.Samples[1].Valid) return false;
+            if ((search == TargetedSearch.Boostback || search == TargetedSearch.Cutoff) &&
+                flight.SeaLevelAltitude < depth && now >= active.RefreshBoostAero)
+            {
+                double altitude = Math.Max(0, flight.SeaLevelAltitude);
+                Vector3d direction = search == TargetedSearch.Cutoff && active.LastBoostDirection.sqrMagnitude > 0
+                    ? active.LastBoostDirection : RoughBoostbackDirection(active, flight, up, velocity);
+                if (farCoast.TryFootprintAero(vessel, frame, velocity, up, direction, altitude,
+                    body.GetPressure(altitude), out FootprintAero sample, out FarSampleStatus status))
+                {
+                    active.BoostAero = sample;
+                    active.RefreshBoostAero = now + 2;
+                }
+                else if (missing && search == TargetedSearch.Boostback && status == FarSampleStatus.FrameBudget)
+                    return false;
+            }
             if (now < active.GlideSamplesDeadline &&
                 (required > 2 && (!active.Samples[2].Valid || !active.Samples[3].Valid) ||
                  needEntryTrim && (!active.Samples[4].Valid || !active.Samples[5].Valid))) return false;
             double[] pressure = ReadFootprintPressure(body);
             nominal = SampledFootprintAtmosphere(depth, pressure, active.Samples[0], active.Samples[1], true,
                 cfg.CoastPitchAoaDegrees);
-            if (search == TargetedSearch.Boostback && active.BoostAero.Valid && now < active.RefreshBoostAero)
+            if (search != TargetedSearch.Glide && active.BoostAero.Valid && now < active.RefreshBoostAero)
                 boostback = new FootprintAtmosphere(depth, pressure, active.Samples[0], active.BoostAero, true);
             if (required > 2)
             {
@@ -878,9 +993,24 @@ namespace KspRetroLanding
             return true;
         }
 
+        private static void RecordTargetedAeroDenial(TargetedRecovery active, FarSampleStatus status)
+        {
+            active.AeroSampleStatus = status;
+            switch (status)
+            {
+                case FarSampleStatus.FrameBudget: active.AeroBudgetDenied++; break;
+                case FarSampleStatus.VoxelPending: active.AeroVoxelPending++; break;
+                case FarSampleStatus.InvalidForce:
+                case FarSampleStatus.Error: active.AeroInvalid++; break;
+            }
+        }
+
         private bool NeedsGlideBounds(TargetedRecovery active, TargetedSearch search) =>
-            search == TargetedSearch.Glide || (search == TargetedSearch.Boostback && cfg.OptimizeRecoveryTrajectory) ||
-            (search == TargetedSearch.Cutoff && active.UseJointPlan);
+            search == TargetedSearch.Glide || NeedsEntryTrim(active, search);
+
+        private bool NeedsEntryTrim(TargetedRecovery active, TargetedSearch search) =>
+            search == TargetedSearch.Boostback && active.Boost?.ReturnOnly == true && cfg.OptimizeRecoveryTrajectory ||
+            search == TargetedSearch.Cutoff && active.UseJointPlan;
 
         private double TargetPitch(int index)
         {

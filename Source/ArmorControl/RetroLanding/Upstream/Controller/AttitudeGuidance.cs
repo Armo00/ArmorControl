@@ -61,6 +61,28 @@ namespace LandingPoc
             return Math.Atan2(pointing.Dot(PitchUp(retrograde, up, north)), pointing.Dot(retrograde)) / Degree;
         }
 
+        internal static double GlideYawAssist(double yawError, double yawRate)
+        {
+            // Release yaw around a settled pitch plane, including residual
+            // yaw velocity so the assist can brake a turn before releasing.
+            double demand = Math.Max(Math.Abs(yawError) / Degree, Math.Abs(yawRate) / (0.5 * Degree));
+            double blend = Math.Max(0, Math.Min(1, (demand - 1) / 3));
+            return blend * blend * (3 - 2 * blend);
+        }
+
+        internal static double GlideRollPointingWeight(double pointingError)
+        {
+            double blend = Math.Max(0, Math.Min(1, (pointingError / Degree - 5) / 15));
+            return 1 - blend * blend * (3 - 2 * blend);
+        }
+
+        internal static double LimitGlideRoll(double pitch, double roll, double yaw)
+        {
+            // Budget roll from the normalized control left after pointing.
+            double remaining = Math.Max(0, 1 - Math.Sqrt(pitch * pitch + yaw * yaw));
+            return Clamp(roll, remaining);
+        }
+
         private static AttitudeVector PitchUp(AttitudeVector retrograde, AttitudeVector up, AttitudeVector north)
         {
             AttitudeVector upInPlane = up.InPlane(retrograde);

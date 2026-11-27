@@ -282,6 +282,43 @@ namespace ArmorOverhaul.ArmorControl.Core
             return pathCache = json.Append(']').ToString();
         }
 
+        internal static bool TryReadImpact(Vessel vessel, double now, out double latitude,
+            out double longitude, out double seconds, out double speed)
+        {
+            latitude = longitude = seconds = speed = 0;
+            if (vessel == null || !EnsureReady(out _)) return false;
+            try
+            {
+                if (!ReferenceEquals(GetStatic(assembly.GetType("Trajectories.Trajectories"), "AttachedVessel"), vessel) ||
+                    !(GetStatic(trajectoryType, "Patches") is IEnumerable patches)) return false;
+                bool first = true;
+                foreach (object patch in patches)
+                {
+                    object start = PathMember(patch, "StartingState");
+                    if (!ReferenceEquals(PathMember(start, "ReferenceBody"), vessel.mainBody)) return false;
+                    // A map can display older predictions. Steering needs a recent vessel state.
+                    if (first)
+                    {
+                        var stamp = PathMember(start, "Time");
+                        double age = stamp == null ? double.NaN : now - Convert.ToDouble(stamp);
+                        if (!(age >= -0.1 && age <= 2)) return false;
+                        first = false;
+                    }
+                    if (!(PathMember(patch, "ImpactPosition") is Vector3d relative)) continue;
+                    Vector3d world = relative + vessel.mainBody.position;
+                    latitude = vessel.mainBody.GetLatitude(world);
+                    longitude = vessel.mainBody.GetLongitude(world);
+                    seconds = Convert.ToDouble(PathMember(patch, "EndTime")) - now;
+                    if (PathMember(patch, "ImpactVelocity") is Vector3d velocity)
+                        speed = (velocity - vessel.mainBody.getRFrmVel(world)).magnitude;
+                    return seconds > 0 && MapGeometry.Finite(seconds) && MapGeometry.Finite(latitude) &&
+                        MapGeometry.Finite(longitude) && MapGeometry.Finite(speed);
+                }
+            }
+            catch (Exception error) { RecordFailure(error); }
+            return false;
+        }
+
         internal static MapPrediction CaptureMapPrediction(Vessel vessel)
         {
             var result = new MapPrediction();

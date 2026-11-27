@@ -12,7 +12,7 @@ namespace LandingPoc
         internal double Minimum, Maximum, Requested, ImpulseRemaining;
         internal double RetainedTailSeconds, ReleasedTailSeconds;
         internal double Interval;
-        internal bool Fine, RequireEntry;
+        internal bool Fine, RequireEntry, AwaitingThrust, AllowReturnOnly;
     }
 
     internal sealed class BoostbackCorrectionResult
@@ -67,11 +67,13 @@ namespace LandingPoc
                 StartPosition = initial.Position, StartVelocity = initial.Velocity, Mask = live.Mask
             };
             var axis = ToBodyFixed(live.Direction).Unit;
-            result.CutNow = CorrectionTrace(live, axis, 0, 0, air, aoa, roll, out _);
+            result.CutNow = Forecast(axis, 0, 0, out _);
             result.TailImpulse = result.CutNow?.BoostThrustDeltaV ?? double.NaN;
             bool cutoffFeasible = result.CutNow?.Safe == true && (!live.RequireEntry || result.CutNow.Touchdown.EntryCompleted);
 
-            if (cutoffFeasible && TargetedLandingGuidance.IsBoostbackCutoffTarget(result.CutNow))
+            // A cutoff can be estimated from actual thrust during startup.
+            // Longer holds use the established-bank response model below.
+            if (live.AwaitingThrust || cutoffFeasible && TargetedLandingGuidance.IsBoostbackCutoffTarget(result.CutNow))
                 return Complete();
 
             double quantum = Math.Max(0.01, input.Settings.SampleSeconds);
@@ -155,11 +157,15 @@ namespace LandingPoc
             {
                 stop.ThrowIfCancellationRequested();
                 result.Candidates++;
-                var candidate = CorrectionTrace(live, direction, thrust, seconds, air, aoa, roll,
-                    out TrajectoryState atRelease);
-                if (candidate == null || !candidate.Safe || live.RequireEntry && !candidate.Touchdown.EntryCompleted ||
-                    candidate.BoostThrustDeltaV > live.ImpulseRemaining || !Better(candidate, result.AfterCorrection) ||
-                    (cutoffFeasible && candidate.MissDistance >= result.CutNow.MissDistance))
+                var candidate = Forecast(direction, thrust, seconds, out TrajectoryState atRelease);
+                if (!TargetedLandingGuidance.CanGuideBoostback(candidate) || live.RequireEntry && !candidate.Touchdown.EntryCompleted ||
+                    candidate.BoostThrustDeltaV > live.ImpulseRemaining) return;
+                if (cutoffFeasible && (!candidate.Safe || candidate.MissDistance >= result.CutNow.MissDistance)) return;
+                if (!cutoffFeasible && result.CutNow?.ReturnOnly == true &&
+                    candidate.MissDistance >= result.CutNow.MissDistance &&
+                    (!candidate.Safe || candidate.MissDistance > TargetedLandingGuidance.BoostbackCutoffWindow)) return;
+                var previous = result.AfterCorrection;
+                if (previous != null && (candidate.Safe == previous.Safe ? candidate.MissDistance >= previous.MissDistance : !candidate.Safe))
                     return;
                 result.AfterCorrection = candidate;
                 result.Direction = direction;
@@ -167,6 +173,14 @@ namespace LandingPoc
                 result.HoldSeconds = seconds;
                 result.EndPosition = atRelease.Position;
                 result.EndVelocity = atRelease.Velocity;
+            }
+
+            BoostbackApproach Forecast(AttitudeVector direction, double thrust, double seconds, out TrajectoryState atRelease)
+            {
+                var landing = CorrectionTrace(live, direction, thrust, seconds, air, aoa, roll, out atRelease);
+                if (landing?.Safe == true || !live.AllowReturnOnly) return landing;
+                return AsReturnOnly(CorrectionTrace(live, direction, thrust, seconds, air, aoa, roll,
+                    out atRelease, returnOnly: true));
             }
         }
 
@@ -195,7 +209,8 @@ namespace LandingPoc
             initialEast * local.X + initialNorth * local.Y + initial.Position.Unit * local.Z;
 
         private BoostbackApproach CorrectionTrace(BoostbackCorrectionInput live, AttitudeVector direction,
-            double thrust, double hold, FootprintAtmosphere atmosphere, double aoa, double roll, out TrajectoryState atRelease)
+            double thrust, double hold, FootprintAtmosphere atmosphere, double aoa, double roll, out TrajectoryState atRelease,
+            bool returnOnly = false)
         {
             var motion = initial;
             atRelease = motion;
@@ -246,7 +261,7 @@ namespace LandingPoc
             }
             trial.CutoffSeconds = time;
             trial.BoostFuel = input.Flight.Mass - flight.Mass;
-            return FinishTrace(motion, flight, input.Engines, trial, atmosphere);
+            return FinishTrace(motion, flight, input.Engines, trial, atmosphere, returnOnly: returnOnly);
         }
 
         internal static double TailFraction(double elapsed, double duration) =>

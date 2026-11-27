@@ -757,13 +757,14 @@ namespace KspRetroLanding
             }
             bool unpoweredCoast = trackingCoast && actualThrust < 1 &&
                 flight.Running == 0 && flight.Starting == 0;
-            if (unpoweredCoast)
+            // Give mandatory targeted samples first use of the existing FAR budget.
+            bool boostback = ReadTargetedCommand(flight, now, elapsed, up, velocity, thrustVector,
+                out Command command, out Vector3d boostbackPointing);
+            if (unpoweredCoast && !boostback)
             {
                 SampleGlideAeroGrid(flight, velocity, up);
                 farCoast.Update(vessel, frame, coastPointing, now, ground.SeaLevelHeight, velocity, horizontal, up, cfg, ref flight);
             }
-            bool boostback = ReadTargetedCommand(flight, now, elapsed, up, velocity, thrustVector,
-                out Command command, out Vector3d boostbackPointing);
             if (!boostback)
             {
                 controller.EntryTiltDegrees = TargetedEntryTilt;
@@ -835,8 +836,8 @@ namespace KspRetroLanding
             else
                 ResetFinalGimbals();
             AttitudeVector aim = AttitudeCoordinates(pointing);
-            bool pitchOnly = bankedCoast && command.Phase == Phase.Coast && !alignForLanding;
-            AttitudeVector rollForward = pitchOnly ? bankedForward : attitude.RollForward(aim, localUp, north, rollDegrees, cfg.SampleSeconds);
+            bool glideAttitude = bankedCoast && UsesCoastAttitude(command.Phase, ignitionBlocked) && !alignForLanding;
+            AttitudeVector rollForward = glideAttitude ? bankedForward : attitude.RollForward(aim, localUp, north, rollDegrees, cfg.SampleSeconds);
             // KSP's pilot-facing dorsal axis is minus the reference transform's forward axis.
             double rollError = AttitudeGuidance.RollError(AttitudeCoordinates(frame.up), AttitudeCoordinates(-frame.forward), aim, rollForward);
             double targetProjection = Vector3d.Dot(pointing, up);
@@ -888,7 +889,7 @@ namespace KspRetroLanding
                 state += string.Format(Invariant, "\nSurface speed {0:0} m/s | Target {1:0} m/s", flight.SurfaceSpeed, cfg.EntryBurnSpeed);
             if (mode == Mode.Control && command.Phase != Phase.Landed)
                 Execute(now, command, flight, pointing, rollError, startError, upright, targetProjection, actualThrust,
-                    mainStartAcceleration, finalSteering, finalDemand, finalAimRate, finalSettledAim, pitchOnly);
+                    mainStartAcceleration, finalSteering, finalDemand, finalAimRate, finalSettledAim, glideAttitude);
             if (traceFinal)
                 WriteFinalDiagnostics(now, flight, command, ground, supports, velocity, thrustVector,
                     rawPointing, pointing, WorldDirection(rollForward), rollError, finalSteering, finalDemand, finalAimRate);
@@ -1190,7 +1191,7 @@ namespace KspRetroLanding
 
         private void Execute(double now, Command command, Flight flight, Vector3d pointing, double rollError, double alignment,
                              double upright, double targetProjection, double actualThrust, double mainStartAcceleration,
-                             bool finalSteering, double finalDemand, Vector3 finalAimRate, Vector3 finalSettledAim, bool pitchOnly)
+                             bool finalSteering, double finalDemand, Vector3 finalAimRate, Vector3 finalSettledAim, bool glideAttitude)
         {
             if (vessel.ActionGroups[KSPActionGroup.SAS]) vessel.ActionGroups.SetGroup(KSPActionGroup.SAS, false);
             double angularBraking = 0;
@@ -1207,8 +1208,7 @@ namespace KspRetroLanding
                 (entryBurn || (command.Phase == Phase.Coast && flight.SeaLevelAltitude >= cfg.EntryBurnAltitude));
             Phase steeringPhase = command.Phase == Phase.Final && !finalSteering ? Phase.Landed : command.Phase;
             rotationInput = TrackAttitude((Vector3)pointing, rollError, angularBraking, coasting, steeringPhase,
-                finalDemand, trackEntryRetrograde, now, finalAimRate, finalSettledAim);
-            if (pitchOnly) rotationInput.z = 0;
+                finalDemand, trackEntryRetrograde, now, finalAimRate, finalSettledAim, glideAttitude);
             if (command.DeployGear) vessel.ActionGroups.SetGroup(KSPActionGroup.Gear, true);
             double ignitionAngle = command.Phase == Phase.Boostback ? command.BoostbackIgnitionAngle :
                 Settings.IgnitionToleranceDegrees;
@@ -1287,13 +1287,14 @@ namespace KspRetroLanding
         private Vector3 TrackAttitude(Vector3 direction, double rollError, double angularBraking, bool coasting,
                                       Phase phase = Phase.Landed, double finalDemand = 0,
                                       bool trackEntryRetrograde = false, double now = 0, Vector3 finalAimRate = default,
-                                      Vector3 finalSettledAim = default)
+                                      Vector3 finalSettledAim = default, bool glideAttitude = false)
         {
             AttitudeVector swing = AttitudeGuidance.PointingError(AttitudeCoordinates(frame.up),
                 AttitudeCoordinates(direction), AttitudeCoordinates(-frame.forward));
             Vector3 error = frame.InverseTransformDirection((Vector3)WorldDirection(swing));
             Rigidbody body = vessel.rootPart.rb;
             Vector3 rate = body == null ? Vector3.zero : frame.InverseTransformDirection(body.angularVelocity);
+            double yawAssist = glideAttitude ? AttitudeGuidance.GlideYawAssist(error.z, rate.z) : 1;
             Vector3 positive = Vector3.zero, negative = Vector3.zero;
             bool rcs = RcsEnabled;
             foreach (PartModule module in torqueModules)
@@ -1330,9 +1331,12 @@ namespace KspRetroLanding
                     ? AttitudeGuidance.TrimCoastAxis(error.x, rate.x, pitchAuthority, cfg.SampleSeconds, ref pitchTrim)
                     : AttitudeGuidance.DampAxis(error.x, rate.x, pitchAuthority, maxRate, aimRate.x,
                         phase == Phase.Final ? (double?)settledError.x : null);
-                double yaw = phase == Phase.Coast
-                    ? AttitudeGuidance.TrimCoastAxis(error.z, rate.z, yawAuthority, cfg.SampleSeconds, ref yawTrim)
-                    : AttitudeGuidance.DampAxis(error.z, rate.z, yawAuthority, maxRate, aimRate.z,
+                double yaw = 0;
+                if (yawAssist == 0) yawTrim = 0;
+                else if (phase == Phase.Coast)
+                    yaw = AttitudeGuidance.TrimCoastAxis(error.z, rate.z, yawAuthority, cfg.SampleSeconds, ref yawTrim);
+                else
+                    yaw = AttitudeGuidance.DampAxis(error.z, rate.z, yawAuthority, maxRate, aimRate.z,
                         phase == Phase.Final ? (double?)settledError.z : null);
                 desiredAcceleration = new Vector3((float)pitch, 0, (float)yaw);
             }
@@ -1345,7 +1349,8 @@ namespace KspRetroLanding
             }
             // Roll around the thrust line, and give nose acquisition priority
             // if the vessel is still far from the requested direction.
-            double rollWeight = 1 - Mathf.SmoothStep(0, 1, Mathf.InverseLerp(20, 65, error.magnitude * Mathf.Rad2Deg));
+            double rollWeight = glideAttitude ? AttitudeGuidance.GlideRollPointingWeight(error.magnitude) :
+                1 - Mathf.SmoothStep(0, 1, Mathf.InverseLerp(20, 65, error.magnitude * Mathf.Rad2Deg));
             if (phase == Phase.Final)
             {
                 // A lightly damped roll can consume vector-control authority
@@ -1393,6 +1398,8 @@ namespace KspRetroLanding
             }
             else if (previousRetrogradeAim.sqrMagnitude != 0)
                 ResetRetrogradeControl();
+            input.z *= (float)yawAssist;
+            if (glideAttitude) input.y = (float)AttitudeGuidance.LimitGlideRoll(input.x, input.y, input.z);
             return input;
         }
 

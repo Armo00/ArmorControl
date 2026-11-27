@@ -62,7 +62,7 @@ namespace LandingPoc
         public double CoastPitchAoaMinimum = double.NaN, CoastPitchAoaMaximum = double.NaN;
         internal double MinimumCoastPitch => double.IsNaN(CoastPitchAoaMinimum) ? CoastPitchAoaDegrees : CoastPitchAoaMinimum;
         internal double MaximumCoastPitch => double.IsNaN(CoastPitchAoaMaximum) ? CoastPitchAoaDegrees : CoastPitchAoaMaximum;
-        public double MaxIgnitionAltitude = 8000;
+        public double MaxIgnitionAltitude = 6000;
         public double EntryBurnAltitude = 65000;
         public double EntryBurnSpeed = 1300;
         public double Gravity = 9.81;

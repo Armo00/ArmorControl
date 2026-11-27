@@ -16,6 +16,8 @@ namespace LandingPoc
         internal double WaypointLatitude, WaypointLongitude, WaypointHeight;
         internal double MaxDeltaV, PositionTolerance, DryMass, FuelReserve;
         internal double GlideRollRate = AttitudeGuidance.ReferenceRollRate / AttitudeGuidance.Degree, CurrentGlideBank;
+        // Observed arrow direction in the retrograde, pitch-up and lateral basis.
+        internal AttitudeVector CurrentGlideDirection;
         internal double PreferredGlideAoa = double.NaN, PreferredGlideBank;
         // East, north and up at the captured position.
         internal AttitudeVector BoostbackBodyAxis;
@@ -61,7 +63,7 @@ namespace LandingPoc
         internal double BoostFuel, RecoveryFuel, FuelAtTouchdown, PitchAoa, GlideBank;
         internal double UpDeltaV, BoostThrustDeltaV, PrecisionMinimumThrust;
         internal RecoveryBurnDirections BurnDirections;
-        internal bool JointPlan;
+        internal bool JointPlan, ReturnOnly;
         internal double DeltaV => Controller.Norm(Controller.Norm(EastDeltaV, NorthDeltaV), UpDeltaV);
         internal double PoweredDeltaV => BoostThrustDeltaV + Touchdown.EntryDeltaV;
         internal BoostbackApproach Copy() => (BoostbackApproach)MemberwiseClone();
@@ -91,6 +93,14 @@ namespace LandingPoc
                 return new BoostbackPreviewResult { Status = "invalid_aoa_range" };
             if (!Valid(input)) return new BoostbackPreviewResult { Status = "invalid_snapshot" };
             return new BoostbackPreview(input, stop).Plan(includeGlide);
+        }
+
+        internal static BoostbackPreviewResult PlanReturn(BoostbackPreviewInput input, CancellationToken stop)
+        {
+            if (input?.Settings != null && !(input.MinimumAoa <= input.DefaultAoa && input.DefaultAoa <= input.MaximumAoa))
+                return new BoostbackPreviewResult { Status = "invalid_aoa_range" };
+            if (!Valid(input)) return new BoostbackPreviewResult { Status = "invalid_snapshot" };
+            return new BoostbackPreview(input, stop).Plan(includeGlide: false, returnOnly: true);
         }
 
         private static bool Valid(BoostbackPreviewInput x)
@@ -136,19 +146,19 @@ namespace LandingPoc
             };
         }
 
-        private BoostbackPreviewResult Plan(bool includeGlide)
+        private BoostbackPreviewResult Plan(bool includeGlide, bool returnOnly = false)
         {
             var output = new BoostbackPreviewResult();
             var elapsed = Stopwatch.StartNew();
             EngineGroup[] banks = Array.Empty<EngineGroup>();
-            bool usePreferred = input.MaxDeltaV == 0 &&
+            bool usePreferred = !returnOnly && input.MaxDeltaV == 0 &&
                 input.PreferredGlideAoa >= input.MinimumAoa && input.PreferredGlideAoa <= input.MaximumAoa &&
                 (input.PreferredGlideAoa != input.DefaultAoa || input.PreferredGlideBank != 0);
             var preferredAir = usePreferred ? PitchAtmosphere(input.PreferredGlideAoa) : null;
             BoostbackApproach retained = preferredAir == null ? null :
                 Trace(null, 0, 0, input.PreferredGlideAoa, preferredAir, input.PreferredGlideBank);
             BoostbackApproach baseline = !includeGlide && retained != null ? retained :
-                Trace(null, 0, 0, input.DefaultAoa, input.DefaultAtmosphere);
+                Trace(null, 0, 0, input.DefaultAoa, input.DefaultAtmosphere, returnOnly: returnOnly);
             output.Baseline = baseline;
             BoostbackApproach best = baseline != null && baseline.Safe ? baseline : null;
             if (Reached(best))
@@ -163,10 +173,11 @@ namespace LandingPoc
                 {
                     stop.ThrowIfCancellationRequested();
                     output.BoostbackBanks++;
-                    BoostbackApproach attempt = Refine(bank, baseline);
+                    BoostbackApproach attempt = Refine(bank, baseline, returnOnly: returnOnly);
                     if (attempt != null && attempt.Engines != 0 && Better(attempt, output.BestPowered)) output.BestPowered = attempt;
                     if (Better(attempt, best)) best = attempt;
-                    if (Reached(best) || footprints >= MaximumFootprints) break;
+                    if (Reached(best) || footprints >= MaximumFootprints ||
+                        returnOnly && TargetedLandingGuidance.CanStartBoostbackWithTrim(output.BestPowered, baseline)) break;
                 }
                 output.Status = Reached(best) ? "planned" :
                     banks.Length == 0 ? "no_engine_group" : "no_solution_in_budget";
@@ -174,7 +185,7 @@ namespace LandingPoc
 
             output.DefaultAoa = best;
             if (Reached(best)) output.FirstFlyableMilliseconds = elapsed.Elapsed.TotalMilliseconds;
-            if (!includeGlide && input.Settings.OptimizeRecoveryTrajectory && banks.Length != 0)
+            if (!returnOnly && !includeGlide && input.Settings.OptimizeRecoveryTrajectory && banks.Length != 0)
                 SearchJoint(output, banks, baseline, elapsed);
             if (!includeGlide && output.Status == "no_solution_in_budget" &&
                 TargetedLandingGuidance.CanStartBoostbackWithTrim(output.BestPowered, baseline))
@@ -184,6 +195,13 @@ namespace LandingPoc
                 output.FirstFlyableMilliseconds = elapsed.Elapsed.TotalMilliseconds;
             }
             if (includeGlide) PlanGlide(output, best, retained, preferredAir != null);
+            if (returnOnly)
+            {
+                if (output.Status == "planned" || output.Status == "planned_with_trim") output.Status = "return_planned";
+                output.DefaultAoa = AsReturnOnly(output.DefaultAoa);
+                output.Baseline = AsReturnOnly(output.Baseline);
+                output.BestPowered = AsReturnOnly(output.BestPowered);
+            }
             output.Footprints = footprints;
             output.BoostbackTrials = poweredTrials;
             output.BoostbackBurnFailures = burnFailures;
@@ -191,6 +209,16 @@ namespace LandingPoc
             output.BoostbackLandingFailures = landingFailures;
             output.RunMilliseconds = elapsed.Elapsed.TotalMilliseconds;
             return output;
+        }
+
+        private static BoostbackApproach AsReturnOnly(BoostbackApproach approach)
+        {
+            if (approach?.Touchdown.HasPoint != true) return null;
+            var result = approach.Copy();
+            result.Safe = false;
+            result.ReturnOnly = true;
+            result.Touchdown.Status = "return_only";
+            return result;
         }
 
         private void PlanGlide(BoostbackPreviewResult output, BoostbackApproach boost,
@@ -328,8 +356,9 @@ namespace LandingPoc
 
         private BoostbackApproach Refine(EngineGroup bank, BoostbackApproach baseline,
             RecoveryBurnDirections directions = default, bool screen = false, int limit = MaximumFootprints,
-            Stopwatch budget = null, BoostbackApproach seed = null)
+            Stopwatch budget = null, BoostbackApproach seed = null, bool returnOnly = false)
         {
+            double acceptDistance = returnOnly ? TargetedLandingGuidance.BoostbackCutoffWindow : input.PositionTolerance;
             double fallback = (input.Flight.Vz + Math.Sqrt(input.Flight.Vz * input.Flight.Vz +
                 2 * input.Settings.Gravity * (input.Flight.SeaLevelAltitude - input.WaypointHeight))) / input.Settings.Gravity;
             double time = Math.Max(5, baseline?.TotalSeconds ?? fallback);
@@ -342,12 +371,13 @@ namespace LandingPoc
                 (baseline == null ? waypointNorth / time - input.NorthSpeed : -baseline.MissNorth / time);
             ClampDeltaV(ref seedEast, ref seedNorth, directions.BoostPitch);
             BoostbackApproach Try(double east, double north) =>
-                Test(bank, east, north, directions, screen, limit, budget);
+                Test(bank, east, north, directions, screen, limit, budget, returnOnly);
             BoostbackApproach candidate = Try(seedEast, seedNorth);
             if (candidate == null && budget == null) candidate = Try(seedEast * 0.5, seedNorth * 0.5);
             if (candidate == null && budget == null) candidate = baseline;
             BoostbackApproach best = candidate != null && candidate.Safe ? candidate : null;
-            for (int pass = 0; pass < 5 && candidate != null && !Reached(best) && HasTraceBudget(limit, budget); pass++)
+            for (int pass = 0; pass < 5 && candidate != null && (best == null || best.MissDistance > acceptDistance) &&
+                HasTraceBudget(limit, budget); pass++)
             {
                 double epsilon = Math.Min(5, Math.Max(1, input.MaxDeltaV / 10));
                 double east = candidate.EastDeltaV, north = candidate.NorthDeltaV;
@@ -380,11 +410,12 @@ namespace LandingPoc
             footprints < limit && (budget == null || budget.ElapsedMilliseconds < JointBudgetMilliseconds);
 
         private BoostbackApproach Test(EngineGroup bank, double east, double north, RecoveryBurnDirections directions,
-            bool screen, int limit, Stopwatch budget)
+            bool screen, int limit, Stopwatch budget, bool returnOnly)
         {
             if (!HasTraceBudget(limit, budget) || Controller.Norm(east, north) > HorizontalBudget(directions.BoostPitch) + 1e-8)
                 return null;
-            return Trace(bank, east, north, input.DefaultAoa, input.DefaultAtmosphere, directions: directions, screen: screen);
+            return Trace(bank, east, north, input.DefaultAoa, input.DefaultAtmosphere,
+                directions: directions, screen: screen, returnOnly: returnOnly);
         }
 
         private static bool TryCorrection(BoostbackApproach origin, BoostbackApproach east, BoostbackApproach north,
@@ -417,7 +448,8 @@ namespace LandingPoc
         }
 
         private BoostbackApproach Trace(EngineGroup bank, double east, double north, double aoa,
-            FootprintAtmosphere atmosphere, double roll = 0, RecoveryBurnDirections directions = default, bool screen = false)
+            FootprintAtmosphere atmosphere, double roll = 0, RecoveryBurnDirections directions = default, bool screen = false,
+            bool returnOnly = false)
         {
             stop.ThrowIfCancellationRequested();
             double vertical = Controller.Norm(east, north) * Math.Tan(directions.BoostPitch * Degree);
@@ -448,15 +480,16 @@ namespace LandingPoc
                     return null;
                 }
                 engines = AfterIgnition(engines, used, ref flight.Restartable);
+                if (returnOnly && flight.Restartable == 0) return null;
             }
 
-            var forecast = FinishTrace(motion, flight, engines, trial, atmosphere, screen);
+            var forecast = FinishTrace(motion, flight, engines, trial, atmosphere, screen, returnOnly);
             if (deltaV > 0 && forecast?.Safe != true) landingFailures++;
             return forecast;
         }
 
         private BoostbackApproach FinishTrace(TrajectoryState motion, Flight flight, Engine[] engines,
-            BoostbackApproach trial, FootprintAtmosphere atmosphere, bool screen = false)
+            BoostbackApproach trial, FootprintAtmosphere atmosphere, bool screen = false, bool returnOnly = false)
         {
             double aoa = trial.PitchAoa, roll = trial.GlideBank;
             if (!CoastToHandoff(ref motion, atmosphere, flight.Mass, aoa, roll, out double coast)) return null;
@@ -487,9 +520,11 @@ namespace LandingPoc
             FootprintAtmosphere entryAir = EntryAtmosphere(controller.EntryTiltDegrees);
             footprints++;
             if (screen) screenedFootprints++;
-            var glide = new FootprintGlideSteering(roll, input.GlideRollRate, input.CurrentGlideBank);
-            bool saveGlideStart = !screen && input.Settings.OptimizeRecoveryTrajectory && trial.Engines != 0;
-            var landing = controller.CaptureFootprint(flight, atmosphere, input.Radius, glide, entryAir, screen, saveGlideStart)(stop);
+            var glide = new FootprintGlideSteering(roll, input.GlideRollRate, input.CurrentGlideBank, aoa,
+                input.CurrentGlideDirection, settings.AttitudeResponseSeconds);
+            bool saveGlideStart = !screen && !returnOnly && input.Settings.OptimizeRecoveryTrajectory && trial.Engines != 0;
+            var landing = controller.CaptureFootprint(flight, atmosphere, input.Radius, glide, entryAir,
+                screen, saveGlideStart, returnOnly)(stop);
             if (!landing.HasPoint) return null;
             double alongEast = horizontal < 0.02 ? 0 : ve / horizontal;
             double alongNorth = horizontal < 0.02 ? 1 : vn / horizontal;
@@ -507,7 +542,7 @@ namespace LandingPoc
             trial.TotalSeconds = trial.CutoffSeconds + coast + landing.Seconds;
             trial.RecoveryFuel = flight.Mass - landing.TouchdownMass;
             trial.FuelAtTouchdown = landing.TouchdownMass - input.DryMass;
-            trial.Safe = (screen ? landing.Status == "screened" : landing.Status == "estimated") &&
+            trial.Safe = (screen || returnOnly ? landing.Status == "screened" : landing.Status == "estimated") &&
                 trial.FuelAtTouchdown >= input.FuelReserve;
             return trial;
         }

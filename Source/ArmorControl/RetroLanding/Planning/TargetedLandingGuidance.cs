@@ -54,6 +54,10 @@ namespace LandingPoc
             powered.MissDistance <= BoostbackCutoffWindow &&
             (baseline?.Safe != true || powered.MissDistance < baseline.MissDistance);
 
+        internal static bool CanGuideBoostback(BoostbackApproach route) =>
+            route != null && (route.Safe || route.ReturnOnly && route.Touchdown.HasPoint) &&
+            FootprintAtmosphere.Finite(route.MissDistance);
+
         internal static bool GlideConflictsWithIgnition(Settings settings, double clearance, double waitSeconds,
             double glideAngle, double alignmentAngle, double turnDegreesPerSecond) =>
             !settings.IgnitionAltitudeBlocked(clearance) && glideAngle > Settings.IgnitionToleranceDegrees &&
@@ -86,6 +90,16 @@ namespace LandingPoc
         internal static long BoostbackMask(BoostbackStage stage, long precision, long full) =>
             stage == BoostbackStage.Aligning ? 0 : stage == BoostbackStage.Full ? full : precision;
 
+        internal static BoostbackStage CoarseBoostbackStage(BoostbackStage previous, BoostbackStage proposed,
+            double angle, bool confirmed, double miss, double impactSeconds, double precisionAcceleration, Settings cfg)
+        {
+            if (proposed != BoostbackStage.Full) return proposed;
+            double earlierFineDistance = cfg.BoostbackFineDistance + Math.Min(cfg.BoostbackFineDistance,
+                0.5 * impactSeconds * precisionAcceleration);
+            if (angle <= FullBoostbackAngle && miss <= earlierFineDistance) return BoostbackStage.Fine;
+            return !confirmed && previous == BoostbackStage.Initial ? previous : proposed;
+        }
+
         internal static AttitudeVector Slew(AttitudeVector from, AttitudeVector to,
             AttitudeVector fallback, double radians)
         {
@@ -101,10 +115,12 @@ namespace LandingPoc
             double forecastUt, ref BoostbackCutoffTrend trend)
         {
             if (planned > 0 && delivered > planned * BoostbackImpulseLimit) return "impulse_limit";
-            if (cutoffForecast?.Safe != true || !FootprintAtmosphere.Finite(cutoffForecast.MissDistance) ||
-                !FootprintAtmosphere.Finite(forecastUt)) return null;
+            if (!CanGuideBoostback(cutoffForecast) || !FootprintAtmosphere.Finite(forecastUt)) return null;
             if (IsBoostbackCutoffTarget(cutoffForecast)) return "predicted_target";
-            return trend.Observe(forecastUt, cutoffForecast.MissDistance) ? "predicted_distance_increasing" : null;
+            if (cutoffForecast.ReturnOnly && cutoffForecast.MissDistance <= BoostbackCutoffDistance)
+                return "return_predicted_target";
+            if (!trend.Observe(forecastUt, cutoffForecast.MissDistance)) return null;
+            return cutoffForecast.ReturnOnly ? "return_predicted_distance_increasing" : "predicted_distance_increasing";
         }
 
         internal static bool IsBoostbackCutoffTarget(BoostbackApproach forecast) =>

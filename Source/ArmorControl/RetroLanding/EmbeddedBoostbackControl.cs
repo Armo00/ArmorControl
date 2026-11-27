@@ -17,13 +17,18 @@ namespace KspRetroLanding
             ",boostback_cut_now_aoa_deg,boostback_cut_now_bank_deg" +
             ",boostback_search_ut,boostback_search_status,boostback_search_rejection,boostback_search_powered_miss_m" +
             ",boostback_search_main_mask,boostback_search_trim_mask,boostback_search_banks,boostback_search_trials" +
-            ",boostback_search_burn_failures,boostback_search_fuel_failures,boostback_search_landing_failures";
+            ",boostback_search_burn_failures,boostback_search_fuel_failures,boostback_search_landing_failures" +
+            ",boostback_prediction_source,boostback_coarse_miss_m,targeted_far_status,targeted_far_retro_ready,targeted_far_aoa_ready" +
+            ",targeted_far_budget_denied,targeted_far_voxel_pending,targeted_far_invalid,boostback_landing_forecast";
 
         private string BoostbackTrace(double now)
         {
             var active = targeted;
-            if (active == null) return new string(',', 44);
-            string planning = BoostbackPlanningTrace(active);
+            if (active == null) return new string(',', 53);
+            string planning = BoostbackPlanningTrace(active) + string.Format(Invariant, ",{0},{1:F2},{2},{3},{4},{5},{6},{7},{8}",
+                active.Prediction, active.Fallback?.Miss, active.AeroSampleStatus, active.Samples[0].Valid ? 1 : 0,
+                active.Samples[1].Valid ? 1 : 0, active.AeroBudgetDenied, active.AeroVoxelPending, active.AeroInvalid,
+                active.Correction?.CutNow?.Touchdown.Status ?? active.Boost?.Touchdown.Status);
             if (active.Boost == null)
                 return new string(',', 24) + string.Format(Invariant, ",{0:F3},{1}", active.LastSearchMilliseconds,
                     active.LastSearchTraces) + new string(',', 7) + planning;
@@ -193,9 +198,11 @@ namespace KspRetroLanding
                 Minimum = minimum, Maximum = maximum, Requested = command.X * flight.Mass,
                 RetainedTailSeconds = keptThrust > 0 ? keptTail / keptThrust : 0,
                 ReleasedTailSeconds = droppedThrust > 0 ? droppedTail / droppedThrust : 0,
-                ImpulseRemaining = active.Boost.BoostThrustDeltaV * TargetedLandingGuidance.BoostbackImpulseLimit - active.DeliveredMagnitude,
+                ImpulseRemaining = BoostbackImpulseRemaining(active),
                 Interval = TargetedLandingGuidance.CorrectionInterval(active.BoostStage),
-                Fine = active.BoostStage == BoostbackStage.Fine, RequireEntry = active.UseJointPlan
+                Fine = active.BoostStage == BoostbackStage.Fine, RequireEntry = active.UseJointPlan,
+                AwaitingThrust = (flight.EstablishedThrust & command.Engines) != command.Engines,
+                AllowReturnOnly = active.Boost.ReturnOnly || active.Fallback != null
             };
 
             AttitudeVector Components(Vector3d vector) =>
