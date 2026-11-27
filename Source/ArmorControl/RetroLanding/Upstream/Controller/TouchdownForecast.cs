@@ -38,15 +38,25 @@ namespace LandingPoc
         private readonly double[] pressure;
         private readonly FootprintAero retrograde, pitched;
         private readonly bool pitchedAvailable;
+        private readonly double[] relativeDensity;
+        private readonly FootprintAeroGrid retrogradeGrid, pitchedGrid, blendedGrid;
+        private readonly double gridBlend;
 
         internal FootprintAtmosphere(double depth, double[] pressure, FootprintAero retrograde,
-                                     FootprintAero pitched, bool pitchedAvailable)
+                                     FootprintAero pitched, bool pitchedAvailable, double[] relativeDensity = null,
+                                     FootprintAeroGrid retrogradeGrid = null, FootprintAeroGrid pitchedGrid = null,
+                                     FootprintAeroGrid blendedGrid = null, double gridBlend = 0)
         {
             this.depth = depth;
             this.pressure = pressure;
             this.retrograde = retrograde;
             this.pitched = pitched;
             this.pitchedAvailable = pitchedAvailable;
+            this.relativeDensity = relativeDensity;
+            this.retrogradeGrid = retrogradeGrid;
+            this.pitchedGrid = pitchedGrid;
+            this.blendedGrid = blendedGrid;
+            this.gridBlend = gridBlend;
         }
 
         internal double Depth => depth;
@@ -55,7 +65,7 @@ namespace LandingPoc
         internal bool HasPitchSample => !IsAtmospheric || (pitchedAvailable && pitched.Valid);
 
         internal FootprintAtmosphere WithPitchSample(FootprintAero sample) =>
-            sample.Valid ? new FootprintAtmosphere(depth, pressure, retrograde, sample, true) : null;
+            sample.Valid ? new FootprintAtmosphere(depth, pressure, retrograde, sample, true, relativeDensity, retrogradeGrid) : null;
 
         internal FootprintAtmosphere BlendPitch(FootprintAtmosphere boundary, double fraction)
         {
@@ -67,7 +77,8 @@ namespace LandingPoc
                 pitched.Drag + fraction * (other.Drag - pitched.Drag),
                 pitched.Lift + fraction * (other.Lift - pitched.Lift),
                 pitched.Cross + fraction * (other.Cross - pitched.Cross), pitched.Far && other.Far);
-            return new FootprintAtmosphere(depth, pressure, retrograde, blended, true);
+            return new FootprintAtmosphere(depth, pressure, retrograde, blended, true, relativeDensity, retrogradeGrid,
+                boundary.pitchedGrid == null ? null : pitchedGrid, boundary.pitchedGrid, fraction);
         }
 
         internal bool Acceleration(double altitude, double horizontal, double vertical, double mass,
@@ -81,8 +92,21 @@ namespace LandingPoc
             if (!coefficients.Valid) return true;
             double at = Math.Max(0, altitude) * (pressure.Length - 1) / depth;
             int index = Math.Min(pressure.Length - 2, (int)at);
-            double q = (pressure[index] + (at - index) * (pressure[index + 1] - pressure[index])) * speedSquared / mass;
+            double fraction = at - index;
+            double q = (pressure[index] + fraction * (pressure[index + 1] - pressure[index])) * speedSquared / mass;
             double speed = Math.Sqrt(speedSquared);
+            var grid = pitch ? pitchedGrid : retrogradeGrid;
+            if (grid != null && relativeDensity != null)
+            {
+                double density = relativeDensity[index] + fraction * (relativeDensity[index + 1] - relativeDensity[index]);
+                FootprintAero adjacent = default;
+                if (grid.TrySample(speed, density, out FootprintAero lookup) &&
+                    (!pitch || blendedGrid == null || blendedGrid.TrySample(speed, density, out adjacent)))
+                {
+                    coefficients = pitch && blendedGrid != null ? FootprintAeroGrid.Mix(lookup, adjacent, gridBlend) : lookup;
+                    q = density * speedSquared / mass;
+                }
+            }
             double lift = coefficients.Lift, side = coefficients.Cross;
             if (pitch && bankDegrees != 0)
             {
@@ -101,9 +125,17 @@ namespace LandingPoc
         internal static bool Finite(double x) => !double.IsNaN(x) && !double.IsInfinity(x);
     }
 
+    internal sealed class GlideCheckpoint
+    {
+        internal Flight Flight;
+        internal Engine[] Engines;
+        internal double Along, Cross, Seconds, HeadingX, HeadingY, Gravity, EntrySeconds, EntryDeltaV;
+    }
+
     internal struct TouchdownEstimate
     {
         internal string Status;
+        internal GlideCheckpoint GlideStart;
         internal double Along, Cross, Seconds, EntrySeconds, LandingSeconds, TouchdownMass;
         internal double GlideRollSeconds, GlidePitchSeconds, EntryDeltaV;
         internal bool HasPoint, UsesFar, Atmospheric, EntryCompleted;
@@ -116,7 +148,7 @@ namespace LandingPoc
 
         internal Func<CancellationToken, TouchdownEstimate> CaptureFootprint(
             Flight flight, FootprintAtmosphere atmosphere, double radius, FootprintGlideSteering glide = default,
-            FootprintAtmosphere entryAtmosphere = null, bool screenOnly = false)
+            FootprintAtmosphere entryAtmosphere = null, bool screenOnly = false, bool captureGlide = false)
         {
             Engine[] engines = (Engine[])specs.Clone();
             Settings settings = cfg.Copy();
@@ -157,13 +189,13 @@ namespace LandingPoc
                 if (currentBank != 0) clone.cachedMasks.Add(currentBank);
                 if (currentPlan.Main != null) clone.cachedMasks.Add(currentPlan.Main.Mask);
                 if (currentPlan.Final != null) clone.cachedMasks.Add(currentPlan.Final.Mask);
-                return clone.TraceFootprint(flight, atmosphere, radius, glide, entryAtmosphere, screenOnly, stop);
+                return clone.TraceFootprint(flight, atmosphere, radius, glide, entryAtmosphere, screenOnly, captureGlide, stop);
             };
         }
 
         private TouchdownEstimate TraceFootprint(Flight s, FootprintAtmosphere air, double radius,
                                                 FootprintGlideSteering glide, FootprintAtmosphere entryAir,
-                                                bool screenOnly, CancellationToken stop)
+                                                bool screenOnly, bool captureGlide, CancellationToken stop)
         {
             var result = new TouchdownEstimate { Status = "no_plan", UsesFar = air.UsesFar, Atmospheric = air.IsAtmospheric };
             if (s.SolidBurnActive || s.Contact || phase == Phase.Yolo || s.Mass <= 0 || radius <= 0)
@@ -229,10 +261,30 @@ namespace LandingPoc
                 s.LateralThrustDirection = Math.Sin(pitch);
                 s.AttitudeRateMeasured = false;
                 s.EngineThrustMeasured = false;
+                if (captureGlide && coasting && result.EntryCompleted && result.GlideStart == null &&
+                    (s.Running | s.Starting | s.IssuedStarts) == 0)
+                {
+                    Flight checkpoint = s;
+                    checkpoint.Propellant = s.Propellant?.ForForecast();
+                    checkpoint.AeroForecast = null;
+                    result.GlideStart = new GlideCheckpoint
+                    {
+                        Flight = checkpoint, Engines = start.CaptureEngines(), Gravity = gravityParameter / (radial * radial),
+                        Along = result.Along, Cross = result.Cross, Seconds = result.Seconds,
+                        HeadingX = headingX, HeadingY = headingY, EntrySeconds = result.EntrySeconds, EntryDeltaV = result.EntryDeltaV
+                    };
+                }
+
+                // There is no landing ignition command allowed far above the
+                // ceiling. The Entry altitude crossing still enters guidance.
+                bool skipPlanning = coasting && s.Running == 0 && s.Starting == 0 &&
+                    cfg.IgnitionAltitudeBlocked(s.Height) &&
+                    s.Height > cfg.MaxIgnitionAltitude + Math.Max(1000, -s.Vz * 15) &&
+                    !(previousEntryAltitude > cfg.EntryBurnAltitude && s.SeaLevelAltitude <= cfg.EntryBurnAltitude);
                 if (coasting)
                 {
                     s.AlignmentSeconds = rolling ? 0 : Math.Abs(cfg.CoastPitchAoaAt(s.SeaLevelAltitude)) / 20;
-                    if (!screenOnly && air.IsAtmospheric && result.Seconds >= nextAero)
+                    if (!skipPlanning && !screenOnly && air.IsAtmospheric && result.Seconds >= nextAero)
                     {
                         double mass = s.Mass;
                         s.AeroForecast = AeroCoastForecast.Integrate(s, cfg.Gravity,
@@ -250,12 +302,6 @@ namespace LandingPoc
                     s.AlignmentSeconds = 0;
                 }
 
-                // There is no landing ignition command allowed far above the
-                // ceiling. The Entry altitude crossing still enters guidance.
-                bool skipPlanning = coasting && s.Running == 0 && s.Starting == 0 &&
-                    cfg.IgnitionAltitudeBlocked(s.Height) &&
-                    s.Height > cfg.MaxIgnitionAltitude + Math.Max(1000, -s.Vz * 15) &&
-                    !(previousEntryAltitude > cfg.EntryBurnAltitude && s.SeaLevelAltitude <= cfg.EntryBurnAltitude);
                 if (phase == Phase.EntryBurn && result.EntrySeconds > 0 && s.SurfaceSpeed <= cfg.EntryBurnSpeed)
                     result.EntryCompleted = true;
                 if (entryCrossing && horizontal >= 1 && EntryTiltDegrees != 0)
@@ -380,6 +426,14 @@ namespace LandingPoc
                         readyAt[i] = Math.Max(0, engines[i].SpoolSeconds - elapsed);
                     }
                 }
+            }
+
+            internal Engine[] CaptureEngines()
+            {
+                var copy = new Engine[engines.Length];
+                for (int i = 0; i < copy.Length; i++)
+                    copy[i] = engines[i].WithIgnitions(starts[i]);
+                return copy;
             }
 
             internal void Update(Command command, double now, ref Flight s)

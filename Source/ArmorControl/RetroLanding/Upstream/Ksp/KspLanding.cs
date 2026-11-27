@@ -757,7 +757,10 @@ namespace KspRetroLanding
             bool unpoweredCoast = trackingCoast && actualThrust < 1 &&
                 flight.Running == 0 && flight.Starting == 0;
             if (unpoweredCoast)
+            {
+                SampleGlideAeroGrid(flight, velocity, up);
                 farCoast.Update(vessel, frame, coastPointing, now, ground.SeaLevelHeight, velocity, horizontal, up, cfg, ref flight);
+            }
             bool boostback = ReadTargetedCommand(flight, now, elapsed, up, velocity, thrustVector,
                 out Command command, out Vector3d boostbackPointing);
             if (!boostback)
@@ -1217,7 +1220,11 @@ namespace KspRetroLanding
             {
                 if ((command.Engines & (1L << i)) == 0) continue;
                 EngineBinding e = engines[i];
-                if (ready && !e.Burning && !e.Issued && e.CanStart()) e.Activate(now);
+                if (ready && !e.Burning && !e.Issued && e.CanStart())
+                {
+                    e.Activate(now);
+                    if (command.Phase == Phase.Boostback && e.Issued) RecordBoostbackActivation(now, alignment);
+                }
                 // The alignment and ullage gates apply to new starts. An
                 // already armed RF engine consumes a relight if throttle drops to zero.
                 if (!e.Burning && !(e.Issued && e.Engine.EngineIgnited)) continue;
@@ -1507,8 +1514,9 @@ namespace KspRetroLanding
                 ",retrograde_pitch_authority_deg_s2,retrograde_yaw_authority_deg_s2,applied_pitch_input,applied_yaw_input" +
                 ",latitude_deg,longitude_deg,touchdown_estimate_status,touchdown_estimate_lat_deg,touchdown_estimate_lon_deg" +
                 ",touchdown_waypoint_miss_m,touchdown_estimate_eta_s,touchdown_estimate_entry_s,touchdown_estimate_landing_burn_s" +
-                ",touchdown_waypoint_bearing_deg,touchdown_waypoint_east_m,touchdown_waypoint_north_m");
-            engineTrace.WriteLine("ut,bit,flight_id,part,rf,ignitions,ullage,min_kn,max_kn,actual_kn,spool_s,spool_source,available,issued,faulted,armed,flameout,previous_throttle,rf_combusting,vessel_throttle,engine_propellant_available,remotetech_connected,engine_independent_throttle_fraction,is_solid");
+                ",touchdown_waypoint_bearing_deg,touchdown_waypoint_east_m,touchdown_waypoint_north_m" +
+                BoostbackTraceColumns + ",render_frame,render_dt_s,far_total_calls,far_total_ms,far_peak_frame_ms");
+            engineTrace.WriteLine("ut,bit,flight_id,part,rf,ignitions,ullage,min_kn,max_kn,actual_kn,spool_s,spool_source,available,issued,faulted,armed,flameout,previous_throttle,rf_combusting,vessel_throttle,engine_propellant_available,remotetech_connected,engine_independent_throttle_fraction,is_solid,activate_ut");
             for (int i = 0; i < engines.Count; i++)
                 Debug.LogFormat("[RetroLanding] bit {0}: {1} flightID={2}", i, engines[i].Engine.part.name, engines[i].Engine.part.flightID);
             lastMask = -1;
@@ -1584,19 +1592,22 @@ namespace KspRetroLanding
                 string.Format(Invariant, ",{0},{1},{2:F4},{3:F4}",
                     retrogradePitch.Authority > 0 ? (retrogradePitch.Authority / AttitudeGuidance.Degree).ToString("F3", Invariant) : "",
                     retrogradeYaw.Authority > 0 ? (retrogradeYaw.Authority / AttitudeGuidance.Degree).ToString("F3", Invariant) : "",
-                    vessel.ctrlState.pitch, vessel.ctrlState.yaw) + FootprintTrace());
+                    vessel.ctrlState.pitch, vessel.ctrlState.yaw) + FootprintTrace() + BoostbackTrace(now) +
+                string.Format(Invariant, ",{0},{1:F4},{2},{3:F3},{4:F3}", Time.frameCount, Time.unscaledDeltaTime,
+                    farCoast.QueryCount, farCoast.QueryMilliseconds, farCoast.TakePeakFrameMilliseconds()));
             for (int i = 0; i < engines.Count; i++)
             {
                 EngineBinding e = engines[i];
                 engineTrace.WriteLine(string.Format(Invariant,
-                    "{0:F3},{1},{2},{3},{4},{5},{6:F3},{7:F2},{8:F2},{9:F2},{10},{11},{12},{13},{14},{15},{16},{17:F4},{18},{19:F4},{20},{21},{22},{23}",
+                    "{0:F3},{1},{2},{3},{4},{5},{6:F3},{7:F2},{8:F2},{9:F2},{10},{11},{12},{13},{14},{15},{16},{17:F4},{18},{19:F4},{20},{21},{22},{23},{24}",
                     now, i, e.Engine.part.flightID, e.Engine.part.name, e.Rf, e.Ignitions, e.Stability,
                     e.Min, e.Max, e.Engine.finalThrust,
                     EngineResponse.Known(e.SpoolSeconds) ? e.SpoolSeconds.ToString("F3", Invariant) : "",
                     e.SpoolSource, (s.Restartable & (1L << i)) != 0, e.Issued, e.Faulted,
                     e.Engine.EngineIgnited, e.Engine.flameout, throttle, e.RfCombusting,
                     vessel.ctrlState.mainThrottle, e.RfPropellantAvailable, remoteTechConnected,
-                    e.Engine.independentThrottle ? (e.Engine.independentThrottlePercentage / 100).ToString("F4", Invariant) : "", false));
+                    e.Engine.independentThrottle ? (e.Engine.independentThrottlePercentage / 100).ToString("F4", Invariant) : "", false,
+                    FootprintAtmosphere.Finite(e.ActivatedAt) ? e.ActivatedAt.ToString("F3", Invariant) : ""));
             }
             lastPhase = c.Phase;
             if (lastMask >= 0 && c.Engines != lastMask) BankChanges++;

@@ -263,14 +263,20 @@ namespace LandingPoc
 
         internal bool CanUseBoostbackBank(long mask, Flight flight, out double acceleration)
         {
-            acceleration = 0;
+            bool usable = TryBoostbackLimits(mask, flight, out _, out double maximum);
+            acceleration = usable ? maximum / flight.Mass : 0;
+            return usable;
+        }
+
+        internal bool TryBoostbackLimits(long mask, Flight flight, out double minimum, out double maximum)
+        {
+            minimum = maximum = 0;
             Group bank = LiveGroup(mask);
             if (bank == null || !Eligible(bank, flight) || (mask & fixedEngines) != 0 ||
                 double.IsPositiveInfinity(EngineStartDelay(mask, flight))) return false;
-            double limit = Limit(bank, flight, true, Phase.Boostback);
-            if (limit < MinimumRunningThrust(bank) || limit <= 0) return false;
-            acceleration = limit / flight.Mass;
-            return true;
+            minimum = MinimumRunningThrust(bank);
+            maximum = Limit(bank, flight, true, Phase.Boostback);
+            return maximum > 0 && maximum >= minimum;
         }
 
         internal double BoostbackSpoolSeconds(long mask, Flight flight) => EngineStartDelay(mask, flight);

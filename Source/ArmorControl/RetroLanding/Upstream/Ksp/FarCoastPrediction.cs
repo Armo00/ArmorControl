@@ -1,5 +1,6 @@
 using System;
 using System.Reflection;
+using Stopwatch = System.Diagnostics.Stopwatch;
 using LandingPoc;
 using UnityEngine;
 
@@ -31,6 +32,36 @@ namespace KspRetroLanding
         private int footprintFrame = -1, spareSamples;
         internal bool CanSampleFootprint => !failed && calculate != null && voxelizationValid != null;
         private bool failed;
+        private long queryTicks, frameTicks, peakFrameTicks;
+        private int queryFrame = -1;
+        internal int QueryCount { get; private set; }
+        internal double QueryMilliseconds => 1000.0 * queryTicks / Stopwatch.Frequency;
+
+        internal double TakePeakFrameMilliseconds()
+        {
+            double value = 1000.0 * peakFrameTicks / Stopwatch.Frequency;
+            peakFrameTicks = 0;
+            return value;
+        }
+
+        private void MeasureForces(Vessel vessel, out Vector3 force, out Vector3 torque, Vector3 velocity, double altitude)
+        {
+            long start = Stopwatch.GetTimestamp();
+            try { calculate(vessel, out force, out torque, velocity, altitude); }
+            finally
+            {
+                long cost = Stopwatch.GetTimestamp() - start;
+                if (queryFrame != Time.frameCount)
+                {
+                    queryFrame = Time.frameCount;
+                    frameTicks = 0;
+                }
+                queryTicks += cost;
+                frameTicks += cost;
+                peakFrameTicks = Math.Max(peakFrameTicks, frameTicks);
+                QueryCount++;
+            }
+        }
 
         internal double MeasuredDrag { get; private set; }
         internal double ModeledDrag { get; private set; }
@@ -82,7 +113,7 @@ namespace KspRetroLanding
                         if (voxelizationValid(vessel))
                         {
                             Vector3 force, torque;
-                            calculate(vessel, out force, out torque, (Vector3)velocity, altitude);
+                            MeasureForces(vessel, out force, out torque, (Vector3)velocity, altitude);
                             budget--;
                             Quaternion rotation = frame.rotation;
                             Quaternion toCoastPose = Quaternion.FromToRotation(frame.up, (Vector3)coastPointing);
@@ -146,7 +177,7 @@ namespace KspRetroLanding
                     Quaternion.LookRotation((Vector3)dorsal.Value, (Vector3)pointing) *
                         Quaternion.Inverse(Quaternion.LookRotation(-frame.forward, frame.up)) :
                     Quaternion.FromToRotation(frame.up, (Vector3)pointing);
-                calculate(vessel, out Vector3 force, out _, Quaternion.Inverse(pose) * (Vector3)velocity, altitude);
+                MeasureForces(vessel, out Vector3 force, out _, Quaternion.Inverse(pose) * (Vector3)velocity, altitude);
                 Vector3d aero = (Vector3d)(pose * force);
                 Vector3d direction = velocity.normalized;
                 Vector3d lift = (up - Vector3d.Dot(up, direction) * direction).normalized;
@@ -220,7 +251,7 @@ namespace KspRetroLanding
                     (cosine * vz - sine * vx) * up;
                 Vector3 force, torque;
                 Quaternion rotationDelta = frame.rotation * toCapturedFrame;
-                calculate(vessel, out force, out torque, rotationDelta * toCurrentPose * (Vector3)airVelocity, asl);
+                MeasureForces(vessel, out force, out torque, rotationDelta * toCurrentPose * (Vector3)airVelocity, asl);
                 Vector3d acceleration = (Vector3d)(toCoastPose * Quaternion.Inverse(rotationDelta) * force) / mass;
                 double forward = Vector3d.Dot(acceleration, horizontal);
                 double vertical = Vector3d.Dot(acceleration, up);

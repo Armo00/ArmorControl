@@ -10,6 +10,18 @@ namespace LandingPoc
         // tries to reduce the position and velocity error toward zero.
         internal const double ApproachTolerance = 250;
         internal const double FullBoostbackAngle = 3;
+        internal const double BoostbackCutoffDistance = 1000;
+        internal const double BoostbackImpulseLimit = 1.5;
+        internal const double MainCorrectionInterval = 1.0;
+        internal const double FineCorrectionInterval = 0.5;
+
+        internal static double CorrectionInterval(BoostbackStage stage) =>
+            stage == BoostbackStage.Fine ? FineCorrectionInterval : MainCorrectionInterval;
+
+        // The caller already checks freshness and tracking. Keep a full main update's
+        // aim through the brief handoff to the next result. A short burn still expires.
+        internal static bool FollowBoostbackCorrection(BoostbackStage stage, double age, double hold) =>
+            age < hold || (stage == BoostbackStage.Full && hold >= MainCorrectionInterval);
 
         internal static bool MayStartBoostback(double clearance, double verticalSpeed, Settings settings) =>
             verticalSpeed >= 0 || settings.IgnitionAltitudeBlocked(clearance);
@@ -43,9 +55,17 @@ namespace LandingPoc
                 axis * (axis.Dot(from) * (1 - Math.Cos(angle)));
         }
 
-        internal static bool CanCutBoostback(double delivered, double planned, BoostbackApproach cutoffForecast) =>
-            delivered >= planned || (delivered > 0 && cutoffForecast != null && cutoffForecast.Safe &&
-                cutoffForecast.MissDistance <= ApproachTolerance);
+        internal static string BoostbackCutoffReason(double delivered, double planned, BoostbackApproach cutoffForecast)
+        {
+            if (planned > 0 && delivered > planned * BoostbackImpulseLimit) return "impulse_limit";
+            return IsBoostbackCutoffTarget(cutoffForecast) ? "predicted_target" : null;
+        }
+
+        internal static bool IsBoostbackCutoffTarget(BoostbackApproach forecast) =>
+            forecast != null && forecast.Safe && forecast.MissDistance <= BoostbackCutoffDistance;
+
+        internal static double BoundedBoostbackThrust(double requested, double minimum, double maximum) =>
+            Math.Max(minimum, Math.Min(maximum, requested));
 
         internal static double AddImpulse(double delivered, double projectedThrust, double mass, double dt) =>
             delivered + (mass > 0 && dt > 0 ? projectedThrust * dt / mass : 0);

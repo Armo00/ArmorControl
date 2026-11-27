@@ -85,6 +85,35 @@ namespace KspRetroLanding
             }
         }
 
+        private double measuredShutdownTime = double.NaN;
+        private double shutdownStart, shutdownPrevious, shutdownArea;
+
+        internal void BeginBoostbackShutdown()
+        {
+            shutdownStart = shutdownPrevious = Math.Max(0, Engine.finalThrust);
+            shutdownArea = 0;
+        }
+
+        internal void ObserveBoostbackShutdown(double elapsed)
+        {
+            if (shutdownStart <= 0 || elapsed <= 0) return;
+            double thrust = Math.Max(0, Engine.finalThrust);
+            shutdownArea += 0.5 * (shutdownPrevious + thrust) * elapsed;
+            shutdownPrevious = thrust;
+            if (thrust > 0.1) return;
+            measuredShutdownTime = shutdownArea / shutdownStart;
+            shutdownStart = 0;
+        }
+
+        internal double BoostbackShutdownTime(double physicsStep)
+        {
+            if (EngineResponse.Known(measuredShutdownTime)) return measuredShutdownTime;
+            double configured = EngineResponse.StockLerp(Engine.useEngineResponseTime, Engine.engineDecelerationSpeed, physicsStep);
+            // Until this engine's tail has been observed, start with the
+            // configured decay estimate plus one control interval.
+            return physicsStep + (EngineResponse.Known(configured) ? configured : 0);
+        }
+
         public void Measure(double pressureAtm, double physicsStep)
         {
             Isp = Engine.atmosphereCurve.Evaluate((float)Math.Max(0, pressureAtm));

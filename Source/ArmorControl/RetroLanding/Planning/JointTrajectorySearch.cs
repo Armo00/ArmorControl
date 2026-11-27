@@ -80,6 +80,40 @@ namespace LandingPoc
         private bool JointReached(BoostbackApproach trial) =>
             Reached(trial) && trial.Engines != 0 && trial.Touchdown.Status == "estimated" && trial.Touchdown.EntryCompleted;
 
+        private BoostbackApproach ResumeGlide(BoostbackApproach origin, FootprintAtmosphere air, double aoa, double roll)
+        {
+            var start = origin.Touchdown.GlideStart;
+            Settings settings = input.Settings.Copy();
+            settings.Gravity = start.Gravity;
+            settings.CoastPitchAoaDegrees = aoa;
+            var controller = new Controller(start.Engines, settings, input.BackupTorque);
+            var steering = new FootprintGlideSteering(roll, input.GlideRollRate, input.CurrentGlideBank);
+            footprints++;
+            var landing = controller.CaptureFootprint(start.Flight, air, input.Radius, steering)(stop);
+            if (!landing.HasPoint) return null;
+            double along = landing.Along, cross = landing.Cross;
+            landing.Along = start.Along + along * start.HeadingX - cross * start.HeadingY;
+            landing.Cross = start.Cross + along * start.HeadingY + cross * start.HeadingX;
+            landing.Seconds += start.Seconds;
+            landing.EntryCompleted = true;
+            landing.EntrySeconds = start.EntrySeconds;
+            landing.EntryDeltaV = start.EntryDeltaV;
+            var trial = origin.Copy();
+            trial.PitchAoa = aoa;
+            trial.GlideBank = roll;
+            trial.Touchdown = landing;
+            trial.TotalSeconds = origin.TotalSeconds - origin.Touchdown.Seconds + landing.Seconds;
+            trial.RecoveryFuel = origin.RecoveryFuel + origin.Touchdown.TouchdownMass - landing.TouchdownMass;
+            trial.FuelAtTouchdown = landing.TouchdownMass - input.DryMass;
+            trial.Safe = landing.Status == "estimated" && trial.FuelAtTouchdown >= input.FuelReserve;
+            FootprintGeometry.Destination(origin.ForecastLatitude, origin.ForecastLongitude,
+                origin.ForecastNorth * landing.Along + origin.ForecastEast * landing.Cross,
+                origin.ForecastEast * landing.Along - origin.ForecastNorth * landing.Cross, input.Radius, out trial.Lat, out trial.Lon);
+            FootprintGeometry.Deviation(input.WaypointLatitude, input.WaypointLongitude, trial.Lat, trial.Lon, input.Radius,
+                out trial.MissDistance, out _, out trial.MissEast, out trial.MissNorth);
+            return FootprintAtmosphere.Finite(trial.MissDistance) ? trial : null;
+        }
+
         private BoostbackApproach VerifyJointGlide(EngineGroup bank, BoostbackApproach origin, int limit, Stopwatch elapsed)
         {
             // Probe a change of range and both sides; every accepted control
@@ -94,7 +128,9 @@ namespace LandingPoc
                 if ((pose.AoA == 0 && pose.Roll != 0) || (pose.AoA == input.DefaultAoa && pose.Roll == 0)) continue;
                 var air = PitchAtmosphere(pose.AoA);
                 if (air == null) continue;
-                var trial = Trace(bank, origin.EastDeltaV, origin.NorthDeltaV, pose.AoA, air, pose.Roll, origin.BurnDirections);
+                var trial = origin.Touchdown.GlideStart == null
+                    ? Trace(bank, origin.EastDeltaV, origin.NorthDeltaV, pose.AoA, air, pose.Roll, origin.BurnDirections)
+                    : ResumeGlide(origin, air, pose.AoA, pose.Roll);
                 if (JointReached(trial)) return trial;
             }
             return origin;

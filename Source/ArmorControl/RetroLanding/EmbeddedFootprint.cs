@@ -47,6 +47,7 @@ namespace KspRetroLanding
 
         private void ResetFootprint()
         {
+            ResetGlideAeroGrid();
             CancelFootprintWork();
             footprintResult = null;
             footprintPressure = null;
@@ -144,8 +145,9 @@ namespace KspRetroLanding
             {
                 nextFootprint = now + 1;
                 bool pitchAvailable = cfg.CoastPitchAoaDegrees == 0 || footprintPitchAero.Valid;
-                var atmosphere = new FootprintAtmosphere(body.atmosphere ? body.atmosphereDepth : 0, footprintPressure,
-                    footprintRetroAero, cfg.CoastPitchAoaDegrees == 0 ? footprintRetroAero : footprintPitchAero, pitchAvailable);
+                var atmosphere = SampledFootprintAtmosphere(body.atmosphere ? body.atmosphereDepth : 0, footprintPressure,
+                    footprintRetroAero, cfg.CoastPitchAoaDegrees == 0 ? footprintRetroAero : footprintPitchAero, pitchAvailable,
+                    cfg.CoastPitchAoaDegrees);
                 footprintOrigin = FootprintFrame(body, up, velocity);
                 // Match the footprint frame to actual surface motion even
                 // when terminal guidance is tracking a terrain-avoidance velocity.
