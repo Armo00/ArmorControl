@@ -620,7 +620,7 @@
 +}
 --- /dev/null
 +++ b/Controller/FootprintGeometry.cs
-@@ -0,0 +1,52 @@
+@@ -0,0 +1,55 @@
 +using System;
 +
 +namespace LandingPoc
@@ -628,6 +628,9 @@
 +    internal static class FootprintGeometry
 +    {
 +        private const double Degree = Math.PI / 180;
++
++        internal static double ContactSurfaceDistance(double terrainDistance, double seaLevelHeight, bool hasOcean) =>
++            hasOcean ? Math.Min(terrainDistance, seaLevelHeight) : terrainDistance;
 +
 +        internal static void Destination(double latitude, double longitude, double north, double east, double radius,
 +                                         out double resultLatitude, out double resultLongitude)
@@ -731,16 +734,17 @@
  
          internal bool IgnitionAltitudeBlocked(double clearance)
          {
-@@ -106,6 +125,8 @@
+@@ -106,6 +125,9 @@
          public long Engines;
          public double X, Up, IgnitionLead;
          public double IgnitionAlignmentSeconds;
 +        internal double BoostbackIgnitionAngle;
 +        internal bool PrepareBoostbackUllage;
++        internal bool PrepareLandingAttitude;
          public bool DeployGear, Emergency, VerticalOnly;
          public string Reason;
          public string YoloTrigger;
-@@ -122,7 +143,7 @@
+@@ -122,7 +144,7 @@
          internal bool FuelPlanSelected;
      }
  
@@ -749,7 +753,7 @@
      {
          public const int MaxMonitoredEngines = EngineModuleCatalog.Capacity;
  
-@@ -144,7 +165,6 @@
+@@ -144,7 +166,6 @@
              internal Flight Flight;
              internal Plan Plan;
              internal double MaxG, Altitude, Precision, Margin, Shortfall;
@@ -757,7 +761,7 @@
              internal bool Optimize;
          }
  
-@@ -175,7 +195,6 @@
+@@ -175,7 +196,6 @@
          }
  
          private readonly Settings cfg;
@@ -765,7 +769,7 @@
          private readonly List<MainSearchCandidate> mainSearchCandidates = new List<MainSearchCandidate>();
          private readonly Dictionary<IgnitionProfile, IgnitionWindow> ignitionWindows =
              new Dictionary<IgnitionProfile, IgnitionWindow>();
-@@ -192,7 +211,6 @@
+@@ -192,7 +212,6 @@
          private long selected;
          private Plan plan;
          private CoastSearch? coastSearch;
@@ -773,7 +777,7 @@
          private bool emergency, verticalOnly, usedAlignmentRelight;
          internal bool CappedFinalCommitted { get; set; }
          private string yoloTrigger;
-@@ -214,7 +232,6 @@
+@@ -214,7 +233,6 @@
          private static readonly double[] FuelDurationFactors = { 0.65, 0.8, 1, 1.2 };
          private static readonly double[] FuelTerminalThrottles = { 0.5, 0.75, 0.875 };
          private const double FuelComparisonLookahead = 4;
@@ -781,7 +785,7 @@
  
          public Controller(Engine[] engines, Settings settings)
              : this(engines, settings, new Torque(), null)
-@@ -231,12 +248,43 @@
+@@ -231,12 +249,43 @@
          {
              if (engines.Length > MaxMonitoredEngines) throw new ArgumentOutOfRangeException("engines");
              cfg = settings;
@@ -826,7 +830,7 @@
          }
  
          // The caller preserves engine indexes for the life of a flight.
-@@ -249,107 +297,9 @@
+@@ -249,107 +298,9 @@
          {
              specs = engines;
              backupTorque = backup;
@@ -937,7 +941,7 @@
          }
  
          private static bool Subset(long subset, long all) { return (subset & all) == subset; }
-@@ -398,9 +348,9 @@
+@@ -398,9 +349,9 @@
              return Subset(group.Mask, available) && Subset(fixedEngines & s.Running, group.Mask);
          }
  
@@ -950,7 +954,7 @@
          }
  
          private double PlanningLimit(Group group, Flight s, double throttle)
-@@ -516,7 +466,7 @@
+@@ -516,7 +467,7 @@
          }
  
          private Plan FindPlan(Flight s, long activeMainMask = 0,
@@ -959,7 +963,7 @@
          {
              // Use the configured terminal estimate first. The solver may
              // move the handoff in either direction to find a continuous burn.
-@@ -525,7 +475,7 @@
+@@ -525,7 +476,7 @@
              if (alreadyPowered) planningThrottle = 1;
              int smallestCount = int.MaxValue;
              double strongest = 0;
@@ -968,7 +972,7 @@
                  if (Eligible(group, s) && (!alreadyPowered || Subset(group.Mask, s.Running)) &&
                      PlanningLimit(group, s, planningThrottle) > s.Mass * cfg.Gravity && group.Min <= Limit(group, s, true))
                  {
-@@ -537,12 +487,12 @@
+@@ -537,12 +488,12 @@
              {
                  int maxCount = best.Final == null ? int.MaxValue : best.Final.Count;
                  double seconds = cfg.PrecisionSeconds * factor;
@@ -983,7 +987,7 @@
                          if (candidate.Main != null) break;
                      }
                  }
-@@ -563,7 +513,7 @@
+@@ -563,7 +514,7 @@
                  double seconds = Math.Max(cfg.PrecisionSeconds, TravelTime(s, 0, cfg.TouchSpeed));
                  foreach (double throttle in AlternativeTerminalThrottle)
                  {
@@ -992,7 +996,7 @@
                      if (best.Main != null) break;
                  }
              }
-@@ -629,10 +579,10 @@
+@@ -629,10 +580,10 @@
  
          private Plan FindPlan(Flight s, long activeMainMask, double terminalSeconds, int maxCount,
                                double terminalThrottle, double planningThrottle, bool igniteNow,
@@ -1005,7 +1009,7 @@
              if (best.Main == null) return best;
  
              // Re-solve the same pair after integrating its main-burn fuel.
-@@ -659,7 +609,7 @@
+@@ -659,7 +610,7 @@
  
          private Plan SearchPlan(Flight s, long activeMainMask, double terminalSeconds, int maxCount,
                                  double terminalThrottle, double planningThrottle, bool igniteNow,
@@ -1014,7 +1018,7 @@
          {
              Plan best = new Plan();
              bool alreadyPowered = activeMainMask != 0;
-@@ -687,7 +637,7 @@
+@@ -687,7 +638,7 @@
              if (altitudeWait > forecastEnd) return best;
  
              mainSearchCandidates.Clear();
@@ -1023,7 +1027,7 @@
              {
                  if ((mainMask != 0 && first.Mask != mainMask) ||
                      (alreadyPowered && first.Mask != activeMainMask) || !Eligible(first, s)) continue;
-@@ -703,7 +653,7 @@
+@@ -703,7 +654,7 @@
              if (mainSearchCandidates.Count == 0) return best;
  
              double cachedJoinSpeed = double.NaN;
@@ -1032,7 +1036,7 @@
              {
                  if (last.Count > maxCount || (best.Final != null && CompareGroups(last, best.Final) > 0)) break;
                  if ((finalMask != 0 && last.Mask != finalMask) || !Eligible(last, s)) continue;
-@@ -1024,60 +974,13 @@
+@@ -1024,60 +975,13 @@
  
          private Plan ReplanCoastPair(Flight s, Plan pair, bool igniteNow = false)
          {
@@ -1096,7 +1100,7 @@
          }
  
          private bool CappedBrakeFitsAfter(Flight s, double wait)
-@@ -1095,6 +998,7 @@
+@@ -1095,6 +999,7 @@
  
          private Plan FindRelight(Flight s, int fewerThan = int.MaxValue, double shutdownLead = 0)
          {
@@ -1104,7 +1108,7 @@
              Plan best = new Plan();
              double extra = Math.Max(0, s.Vz / cfg.Gravity);
              double coastToGround = (s.Vz + Math.Sqrt(s.Vz * s.Vz + 2 * cfg.Gravity * s.Height)) / cfg.Gravity;
-@@ -1478,7 +1382,7 @@
+@@ -1478,7 +1383,7 @@
              // room to steer. Otherwise require authority at the current tilt.
              double projectedTilt = remaining > 2 * s.TerminalAlignmentSeconds
                  ? Math.Max(requiredTilt, (s.UprightAngle + requiredTilt) / 2) : s.UprightAngle;
@@ -1113,7 +1117,7 @@
              {
                  if (group.Count > maxCount || !Subset(group.Mask, s.Running) || !Eligible(group, s)) continue;
                  double limit = Limit(group, s, capped);
-@@ -1509,7 +1413,7 @@
+@@ -1509,7 +1414,7 @@
              double duration = TravelTime(s, target.JoinHeight, target.JoinSpeed);
              double accel = Norm(x, up);
              double joinMass = MassAfter(s.Mass, accel, duration, running);
@@ -1122,7 +1126,7 @@
              double terminalAccel = cfg.Gravity + (target.JoinSpeed - cfg.TouchSpeed) / target.TerminalSeconds;
              return accel * s.Mass <= Limit(running, s, cappedMain) * 1.005 && accel * joinMass >= running.Min &&
                     terminal != null && Eligible(terminal, s) &&
-@@ -1561,7 +1465,8 @@
+@@ -1561,7 +1466,8 @@
                  best = FindFineMainTrajectory(s, running, true);
                  if (best.Main != null) return best;
              }
@@ -1132,7 +1136,7 @@
              {
                  if (alternative.Mask == running.Mask || !Subset(alternative.Mask, running.Mask & s.Running) ||
                      !Eligible(alternative, s) || (fixedEngines & (running.Mask ^ alternative.Mask)) != 0 ||
-@@ -1574,6 +1479,7 @@
+@@ -1574,6 +1480,7 @@
                      !MainVector(ThrustAfterDownselect(s, running, alternative), candidate.JoinHeight, candidate.JoinSpeed,
                          out x, out up, alternative.Mask != candidate.Final.Mask, candidate.FadeMainLift) ||
                      !TerminalVerticalAuthority(s, alternative, up + s.ExternalUpAcceleration)) continue;
@@ -1140,7 +1144,7 @@
                  if (best.Main == null || candidate.Main.Count > best.Main.Count ||
                      (candidate.Main.Count == best.Main.Count && ComparePlanGroups(candidate, best) < 0))
                      best = candidate;
-@@ -1724,7 +1630,7 @@
+@@ -1724,7 +1631,7 @@
                  reason += " (horizontal target not reached)";
              if ((phase == Phase.Main || phase == Phase.Final) && s.Running != terminal.Mask)
              {
@@ -1149,7 +1153,7 @@
                  if (active != null)
                  {
                      terminalFlight = ThrustAfterDownselect(s, active, terminal);
-@@ -1732,6 +1638,7 @@
+@@ -1732,6 +1639,7 @@
                  }
              }
              selected = terminal.Mask;
@@ -1157,7 +1161,7 @@
              phase = Phase.Final;
              if (!emergency) CappedFinalCommitted = true;
              return Output(s, selected, LeadFinalLateral(terminalFlight, terminal, x, up), up, reason);
-@@ -1822,15 +1729,20 @@
+@@ -1822,15 +1730,20 @@
                  s.Vz * s.Vz >= 2 * (minimumUp - cfg.Gravity) *
                      (s.Height - Math.Max(0.25, -s.Vz * cfg.SampleSeconds))) return false;
  
@@ -1180,7 +1184,7 @@
              }
              if (best != null)
              {
-@@ -1868,7 +1780,7 @@
+@@ -1868,7 +1781,7 @@
              // A selected, live set can remain controllable at its operating
              // throttle even if a refresh rejects an endpoint of its range.
              Group live = selected != 0 && Subset(selected, s.Running)
@@ -1189,7 +1193,7 @@
              if (CanKeepFinalGroup(s, live, recoveringRise)) return live;
  
              Group best = null;
-@@ -2155,7 +2067,7 @@
+@@ -2155,7 +2068,7 @@
          private Command Output(Flight s, long engines, double x, double up, string reason)
          {
              double accel = Norm(x, up);
@@ -1198,7 +1202,7 @@
              // Powered Final passes a net braking vector to the flight adapter,
              // which subtracts aerodynamics and caps the actual nozzle thrust.
              bool netTerminalVector = phase == Phase.Final && s.Running != 0;
-@@ -2196,18 +2108,23 @@
+@@ -2196,18 +2109,23 @@
              entryExitReason = null;
              relightShutdownMask = 0;
              relightBankLimit = int.MaxValue;
@@ -1226,7 +1230,7 @@
  
          private Command ContinueEntryBurn(Flight s)
          {
-@@ -2215,10 +2132,11 @@
+@@ -2215,10 +2133,11 @@
              if (s.SurfaceSpeed <= cfg.EntryBurnSpeed)
                  return EndEntryBurn(s, "entry burn target reached");
  
@@ -1239,7 +1243,7 @@
                  double bestDelay = double.PositiveInfinity;
                  foreach (Group candidate in groups)
                  {
-@@ -2245,8 +2163,14 @@
+@@ -2245,8 +2164,14 @@
              selected = group.Mask;
              double acceleration = thrust / s.Mass;
              double up = Math.Max(-1, Math.Min(1, -s.Vz / s.SurfaceSpeed));
@@ -1256,7 +1260,7 @@
          }
  
          private Command EndEntryBurn(Flight s, string reason)
-@@ -2282,6 +2206,7 @@
+@@ -2282,6 +2207,7 @@
              if (s.Contact)
              {
                  phase = Phase.Landed;
@@ -1264,7 +1268,7 @@
                  return Output(s, 0, 0, 0, "contact confirmed");
              }
              if (s.SolidBurnActive)
-@@ -2290,11 +2215,7 @@
+@@ -2290,11 +2216,7 @@
                  yoloInhibit = "solid_motor_burning";
                  return AlignForMain(s, 0, "attitude only, waiting for solid motor burnout");
              }
@@ -1277,7 +1281,7 @@
              if (phase == Phase.Final && !emergency) CappedFinalCommitted = true;
              if (phase == Phase.Coast && crossedEntryAltitude && s.SurfaceSpeed > cfg.EntryBurnSpeed)
                  ResetUnpowered(Phase.EntryBurn);
-@@ -2361,17 +2282,22 @@
+@@ -2361,17 +2283,22 @@
                          // have no min-thrust handoff. Preserve time to replan while
                          // braking still fits even in the ballistic case.
                          double reserve = Math.Max(cfg.PrecisionSeconds, cfg.AttitudeResponseSeconds);
@@ -1301,7 +1305,22 @@
                          if (AirBrakingCanDefer(s))
                              return AlignForMain(s, 0, "coast, retain useful aerodynamic braking");
                      }
-@@ -2411,7 +2337,7 @@
+@@ -2379,9 +2306,13 @@
+                     {
+                         if (plan.Wait > cfg.SampleSeconds * 1.5 || s.Vz > 0 ||
+                             (direct && RelightAlignment(s, plan.RelightX, plan.RelightUp) > 0))
+-                            return direct
++                        {
++                            Command coast = direct
+                                 ? Output(s, 0, plan.RelightX, plan.RelightUp, "coast, align for terminal relight")
+                                 : AlignForMain(s, 0, "coast, align for planned main burn");
++                            coast.PrepareLandingAttitude = s.Vz < 0;
++                            return coast;
++                        }
+                         selected = plan.Main.Mask;
+                         phase = direct ? Phase.Final : Phase.Main;
+                         if (direct)
+@@ -2411,7 +2342,7 @@
                  }
              }
  
@@ -1310,7 +1329,7 @@
              bool pending = (s.Starting & selected) != 0;
              double fx, fz;
              bool nearVertical = FinalVector(s, out fx, out fz);
-@@ -2569,7 +2495,8 @@
+@@ -2569,7 +2500,8 @@
              x = up = 0;
              long active = s.Running | s.Starting;
              int bestRank = int.MaxValue;
@@ -1320,7 +1339,7 @@
              {
                  if (retainedMask != 0 && (group.Mask == retainedMask || !Subset(retainedMask, group.Mask))) continue;
                  if (!Eligible(group, s)) continue;
-@@ -2592,6 +2519,7 @@
+@@ -2592,6 +2524,7 @@
                  bestRank = rank;
                  x = side;
                  up = vertical;
@@ -1328,7 +1347,7 @@
              }
              return best;
          }
-@@ -2600,6 +2528,7 @@
+@@ -2600,6 +2533,7 @@
          {
              if (CappedFinalCommitted)
                  return RecoverCappedFinal(s, fx, fz);
@@ -1336,7 +1355,7 @@
              double impact = EmergencyImpactSeconds(s);
              bool lowSpeed = !emergency && s.Vz >= -EmergencyMinimumDescentSpeed;
              Group best = null;
-@@ -2660,7 +2589,7 @@
+@@ -2660,7 +2594,7 @@
              awaitingEmergencyStarts = false;
              if (established == 0) return EstablishEmergencyThrust(s, strongest);
  
@@ -2075,7 +2094,15 @@
      public sealed partial class KspLanding : MonoBehaviour
      {
          internal static KspLanding Instance { get; private set; }
-@@ -68,10 +67,15 @@
+@@ -18,6 +17,7 @@
+         {
+             public double SeaLevelHeight, Distance, HullOffset, WheelOffset, RawDistance, FootClearance;
+             public int ActiveSupports, FootRayHits;
++            public bool WaterSurface;
+             public Collider Collider, RawCollider;
+             public double BottomOffset => Math.Min(HullOffset, WheelOffset);
+             public double HullClearance => Distance + HullOffset;
+@@ -68,10 +68,15 @@
          private string lastYoloState;
          private Vector3d horizontal = Vector3d.zero;
          private Rect window = new Rect(260, 100, 300, 145);
@@ -2093,7 +2120,7 @@
          private double rollDegrees;
          private double pitchTrim, yawTrim, lastTrimAoa = double.NaN;
          private RetrogradeAxisControl retrogradePitch, retrogradeYaw;
-@@ -96,8 +100,7 @@
+@@ -96,8 +101,7 @@
          private void Awake()
          {
              Instance = this;
@@ -2103,7 +2130,7 @@
              settingsStore.Current.Apply(cfg, out rollDegrees);
              SyncSettingsText();
              GameEvents.onVesselGoOnRails.Add(OnVesselGoOnRails);
-@@ -115,19 +118,56 @@
+@@ -115,19 +119,56 @@
          {
              if (!IsIdle) throw new InvalidOperationException("Recovery is active.");
              if (settingsStore.HasCurrent) return;
@@ -2161,7 +2188,7 @@
          }
  
          private void OnGUI()
-@@ -144,36 +184,65 @@
+@@ -144,36 +185,65 @@
          {
              if (IsIdle)
              {
@@ -2241,7 +2268,7 @@
              GUILayout.BeginHorizontal();
              GUILayout.Label("Final reserve (s)", GUILayout.Width(100));
              string previous = finalReserveText;
-@@ -195,7 +264,7 @@
+@@ -195,7 +265,7 @@
              GUILayout.Label("Active " + rollDegrees.ToString("0.##", Invariant));
              GUILayout.EndHorizontal();
              GUILayout.BeginHorizontal();
@@ -2250,7 +2277,7 @@
              previous = coastPitchAoaText;
              coastPitchAoaText = GUILayout.TextField(coastPitchAoaText, 8, GUILayout.Width(55));
              double pitchAoa;
-@@ -204,6 +273,10 @@
+@@ -204,6 +274,10 @@
                  cfg.CoastPitchAoaDegrees = pitchAoa;
              GUILayout.Label("Active " + cfg.CoastPitchAoaDegrees.ToString("0.##", Invariant));
              GUILayout.EndHorizontal();
@@ -2261,7 +2288,7 @@
              GUILayout.BeginHorizontal();
              GUILayout.Label("Max ignition AGL (km)", GUILayout.Width(135));
              previous = ignitionAltitudeText;
-@@ -235,7 +308,10 @@
+@@ -235,7 +309,10 @@
                  cfg.EntryBurnSpeed = entrySpeed;
              GUILayout.Label("Active " + cfg.EntryBurnSpeed.ToString("0.##", Invariant));
              GUILayout.EndHorizontal();
@@ -2272,7 +2299,7 @@
              var current = new LandingTuning(cfg, rollDegrees);
              GUILayout.BeginHorizontal();
              if (GUILayout.Button("Reset to defaults"))
-@@ -333,6 +409,8 @@
+@@ -333,6 +410,8 @@
          private void ResetGuidance()
          {
              bool cappedFinalCommitted = controller != null && controller.CappedFinalCommitted;
@@ -2281,7 +2308,7 @@
              ResetFinalGimbals();
              pitchTrim = yawTrim = 0;
              ResetRetrogradeControl();
-@@ -485,6 +563,9 @@
+@@ -485,6 +564,9 @@
          {
              if (suspendedForWarp) return;
              suspendedForWarp = true;
@@ -2291,7 +2318,7 @@
              rotationInput = Vector3.zero;
              throttle = 0;
              ullaging = false;
-@@ -508,7 +589,7 @@
+@@ -508,7 +590,7 @@
          {
              double now = Planetarium.GetUniversalTime();
              if (remoteTechHasConnection != null) remoteTechConnected = remoteTechHasConnection(remoteTechVesselId);
@@ -2300,11 +2327,12 @@
              {
                  controller.RefreshThrust(MeasureSpecs(), BackupTorque());
                  nextThrust = now + 0.5;
-@@ -518,21 +599,24 @@
+@@ -518,21 +600,25 @@
              double vz = Vector3d.Dot(velocity, up);
              Vector3d lateral = velocity - vz * up;
              GroundReading ground = ReadGround(up, lateral, vz);
 -            Vector3d lateralError = lateral - TerrainAvoidanceVelocity(now, up, ground, lateral, vz);
++            bool ignitionBlocked = cfg.IgnitionAltitudeBlocked(ground.Clearance);
 +            cfg.Gravity = vessel.mainBody.gravParameter / (vessel.CoMD - vessel.mainBody.position).sqrMagnitude;
 +            Vector3d terrainVelocity = TerrainAvoidanceVelocity(now, up, ground, lateral, vz);
 +            Vector3d lateralError = lateral - terrainVelocity - TargetedVelocity(up, lateral, ground, vz);
@@ -2315,7 +2343,7 @@
              AttitudeVector localUp = AttitudeCoordinates(up), north = LocalNorth(up);
              AttitudeVector surfaceRetrograde = attitude.SurfaceRetrograde(AttitudeCoordinates(velocity), AttitudeCoordinates(frame.up));
              double coastPitchAoa = cfg.CoastPitchAoaAt(ground.SeaLevelHeight);
-+            bool bankedCoast = TryTargetedGlideAttitude(ground.SeaLevelHeight, surfaceRetrograde, localUp, north,
++            bool bankedCoast = TryTargetedGlideAttitude(ground.SeaLevelHeight, ignitionBlocked, surfaceRetrograde, localUp, north,
 +                ref coastPitchAoa, out Vector3d bankedPointing, out AttitudeVector bankedForward);
              if (coastPitchAoa != lastTrimAoa)
              {
@@ -2329,7 +2357,15 @@
              Vector3d braking = WorldDirection(surfaceRetrograde);
              double tilt = Vector3.Angle(frame.up, (Vector3)braking);
              double upright = Vector3d.Dot(frame.up, up);
-@@ -673,8 +757,18 @@
+@@ -560,7 +646,6 @@
+                 LateralAxisRate = Vector3d.Dot(axisRate, horizontal), UpAxisRate = Vector3d.Dot(axisRate, up),
+                 LateralVelocityLookahead = 0.6 * cfg.AttitudeResponseSeconds,
+                 GearCommanded = vessel.ActionGroups[KSPActionGroup.Gear] };
+-            bool ignitionBlocked = cfg.IgnitionAltitudeBlocked(flight.Height);
+             bool trackingCoast = UsesCoastAttitude(lastPhase, ignitionBlocked);
+             double actualThrust = 0;
+             int enginesFiring = 0;
+@@ -673,8 +758,18 @@
              bool unpoweredCoast = trackingCoast && actualThrust < 1 &&
                  flight.Running == 0 && flight.Starting == 0;
              if (unpoweredCoast)
@@ -2349,37 +2385,56 @@
              DecisionReason = command.Reason;
              if (lastPhase == Phase.EntryBurn && command.Phase != Phase.EntryBurn)
              {
-@@ -694,7 +788,10 @@
+@@ -694,9 +789,22 @@
                  thrustSide = Math.Max(-thrustUp * tangent, Math.Min(0, thrustSide));
                  requested = thrustSide * horizontal + thrustUp * up;
              }
 -            Vector3d pointing = command.Phase == Phase.EntryBurn ? braking :
+-                UsesCoastAttitude(command.Phase, ignitionBlocked) ? coastPointing :
+-                requested.sqrMagnitude > 1e-8 ? requested.normalized : up;
++            Vector3d landingPointing = requested.sqrMagnitude > 1e-8 ? requested.normalized : up;
++            bool alignForLanding = false;
++            if (command.PrepareLandingAttitude && !ignitionBlocked && targeted?.Leg == TargetedLeg.Recovery)
++            {
++                alignForLanding = targeted.StandardFallback || TargetedLandingGuidance.GlideConflictsWithIgnition(
++                    cfg, flight.Height, command.PlannedIgnitionWait, Vector3d.Angle(coastPointing, landingPointing),
++                    Vector3d.Angle(frame.up, landingPointing), TurnDegreesPerSecond);
++                if (alignForLanding && !targeted.StandardFallback)
++                    FallBackTargeted(targeted, "Glide attitude conflicts with safe ignition. Aligning for standard landing.");
++            }
++            command.PrepareLandingAttitude = alignForLanding;
 +            Vector3d pointing = command.Phase == Phase.Boostback ? boostbackPointing :
 +                command.Phase == Phase.EntryBurn ?
 +                    (controller.EntryTiltDegrees != 0 && command.Engines != 0 && requested.sqrMagnitude > 1e-8
 +                        ? requested.normalized : braking) :
-                 UsesCoastAttitude(command.Phase, ignitionBlocked) ? coastPointing :
-                 requested.sqrMagnitude > 1e-8 ? requested.normalized : up;
++                UsesCoastAttitude(command.Phase, ignitionBlocked) && !alignForLanding ? coastPointing : landingPointing;
              Vector3d rawPointing = pointing;
-@@ -727,7 +824,8 @@
+             bool inFinal = command.Phase == Phase.Final;
+             bool traceFinal = inFinal || lastPhase == Phase.Final;
+@@ -727,7 +835,8 @@
              else
                  ResetFinalGimbals();
              AttitudeVector aim = AttitudeCoordinates(pointing);
 -            AttitudeVector rollForward = attitude.RollForward(aim, localUp, north, rollDegrees, cfg.SampleSeconds);
-+            bool pitchOnly = bankedCoast && command.Phase == Phase.Coast;
++            bool pitchOnly = bankedCoast && command.Phase == Phase.Coast && !alignForLanding;
 +            AttitudeVector rollForward = pitchOnly ? bankedForward : attitude.RollForward(aim, localUp, north, rollDegrees, cfg.SampleSeconds);
              // KSP's pilot-facing dorsal axis is minus the reference transform's forward axis.
              double rollError = AttitudeGuidance.RollError(AttitudeCoordinates(frame.up), AttitudeCoordinates(-frame.forward), aim, rollForward);
              double targetProjection = Vector3d.Dot(pointing, up);
-@@ -759,6 +857,7 @@
+@@ -759,8 +868,11 @@
              }
              double bodyPitchAoa = velocity.magnitude >= AttitudeGuidance.RetrogradeMinimumSpeed
                  ? AttitudeGuidance.PitchAoa(surfaceRetrograde, AttitudeCoordinates(frame.up), localUp, north) : double.NaN;
-+            CaptureEmbeddedFlight(command, flight, bodyPitchAoa, coastPitchAoa, lateral.magnitude);
++            double targetCoastAoa = alignForLanding
++                ? AttitudeGuidance.PitchAoa(surfaceRetrograde, aim, localUp, north) : coastPitchAoa;
++            CaptureEmbeddedFlight(command, flight, bodyPitchAoa, targetCoastAoa, lateral.magnitude);
              WriteTrace(now, flight, command, error, actualThrust, supports, upright, ground, targetProjection, lateral.magnitude,
-                 unpoweredCoast, enginesFiring, velocity, pointing, rollError, bodyPitchAoa,
+-                unpoweredCoast, enginesFiring, velocity, pointing, rollError, bodyPitchAoa,
++                unpoweredCoast, enginesFiring, velocity, pointing, rollError, bodyPitchAoa, targetCoastAoa,
                  rootBody == null ? 0 : Vector3.Dot(rootBody.angularVelocity, frame.up));
-@@ -776,7 +875,7 @@
+             state = string.Format(Invariant, "{0} {1} | {2:0} m | Vz {3:0.0} m/s\n{4}",
+                 mode, command.Phase, flight.Height, vz, command.Reason);
+@@ -776,7 +888,7 @@
                  state += string.Format(Invariant, "\nSurface speed {0:0} m/s | Target {1:0} m/s", flight.SurfaceSpeed, cfg.EntryBurnSpeed);
              if (mode == Mode.Control && command.Phase != Phase.Landed)
                  Execute(now, command, flight, pointing, rollError, startError, upright, targetProjection, actualThrust,
@@ -2388,7 +2443,50 @@
              if (traceFinal)
                  WriteFinalDiagnostics(now, flight, command, ground, supports, velocity, thrustVector,
                      rawPointing, pointing, WorldDirection(rollForward), rollError, finalSteering, finalDemand, finalAimRate);
-@@ -1068,7 +1167,7 @@
+@@ -928,9 +1040,16 @@
+             if (ground.Collider == null)
+             {
+                 double terrain = ground.RawCollider == null ? vessel.terrainAltitude : vessel.PQSAltitude();
+-                ground.Distance = seaLevelHeight - (vessel.mainBody.ocean ? Math.Max(0, terrain) : terrain);
+-            }
+-            if (ground.ActiveSupports > 0 && ground.FootRayHits == 0)
++                ground.Distance = seaLevelHeight - terrain;
++            }
++            double contactDistance = FootprintGeometry.ContactSurfaceDistance(ground.Distance, seaLevelHeight, vessel.mainBody.ocean);
++            if (contactDistance < ground.Distance || (vessel.mainBody.ocean && ground.Collider == null && contactDistance == seaLevelHeight))
++            {
++                ground.Distance = contactDistance;
++                ground.Collider = null;
++                ground.WaterSurface = true;
++            }
++            if (ground.ActiveSupports > 0 && double.IsPositiveInfinity(ground.FootClearance))
+                 ground.FootClearance = ground.Distance + ground.WheelOffset;
+             return ground;
+         }
+@@ -963,9 +1082,10 @@
+                     if (hit.collider == null || FlightGlobals.GetPartUpwardsCached(hit.collider.gameObject) != null) continue;
+                     nearest = Math.Min(nearest, hit.distance - offset);
+                 }
+-                if (double.IsPositiveInfinity(nearest)) continue;
+-                ground.FootRayHits++;
+-                ground.FootClearance = Math.Min(ground.FootClearance, nearest);
++                double contact = vessel.mainBody.ocean
++                    ? FootprintGeometry.ContactSurfaceDistance(nearest, vessel.mainBody.GetAltitude(foot), true) : nearest;
++                if (contact == nearest && !double.IsPositiveInfinity(nearest)) ground.FootRayHits++;
++                ground.FootClearance = Math.Min(ground.FootClearance, contact);
+             }
+         }
+ 
+@@ -1048,6 +1168,8 @@
+         private bool SampleSurface(Vector3d origin, Vector3d up, float depth, out RaycastHit nearest)
+         {
+             nearest = new RaycastHit();
++            if (vessel.mainBody.ocean)
++                depth = Math.Min(depth, (float)Math.Max(0, vessel.mainBody.GetAltitude(origin)));
+             int hits = Physics.RaycastNonAlloc((Vector3)origin, (Vector3)(-up), surfaceHits, depth,
+                 (1 << 15) | LayerUtil.DefaultEquivalent, QueryTriggerInteraction.Ignore);
+             for (int i = 0; i < hits; i++)
+@@ -1068,7 +1190,7 @@
  
          private void Execute(double now, Command command, Flight flight, Vector3d pointing, double rollError, double alignment,
                               double upright, double targetProjection, double actualThrust, double mainStartAcceleration,
@@ -2397,16 +2495,17 @@
          {
              if (vessel.ActionGroups[KSPActionGroup.SAS]) vessel.ActionGroups.SetGroup(KSPActionGroup.SAS, false);
              double angularBraking = 0;
-@@ -1078,7 +1177,7 @@
+@@ -1078,17 +1200,21 @@
                  angularBraking = Settings.TerminalTurnBraking;
              bool altitudeBlocked = cfg.IgnitionAltitudeBlocked(flight.Height);
              bool entryBurn = command.Phase == Phase.EntryBurn;
 -            bool ignitionAllowed = entryBurn || !altitudeBlocked;
+-            bool coasting = entryBurn || UsesCoastAttitude(command.Phase, altitudeBlocked);
 +            bool ignitionAllowed = command.Phase == Phase.Boostback || entryBurn || !altitudeBlocked;
-             bool coasting = entryBurn || UsesCoastAttitude(command.Phase, altitudeBlocked);
++            bool coasting = entryBurn || UsesCoastAttitude(command.Phase, altitudeBlocked) && !command.PrepareLandingAttitude;
              bool rcs = RcsEnabled;
              bool trackEntryRetrograde = actualThrust < 1 &&
-@@ -1086,9 +1185,13 @@
+                 (entryBurn || (command.Phase == Phase.Coast && flight.SeaLevelAltitude >= cfg.EntryBurnAltitude));
              Phase steeringPhase = command.Phase == Phase.Final && !finalSteering ? Phase.Landed : command.Phase;
              rotationInput = TrackAttitude((Vector3)pointing, rollError, angularBraking, coasting, steeringPhase,
                  finalDemand, trackEntryRetrograde, now, finalAimRate, finalSettledAim);
@@ -2422,7 +2521,7 @@
              for (int i = 0; i < engines.Count; i++)
              {
                  EngineBinding e = engines[i];
-@@ -1102,11 +1205,13 @@
+@@ -1102,11 +1228,13 @@
                  {
                      bool unsettled = e.NeedsUllage && !e.Issued && e.Stability < 0.99;
                      if (double.IsNaN(e.RequestedAt) && (!unsettled || rcs))
@@ -2438,7 +2537,7 @@
                  }
              }
              throttle = 0;
-@@ -1115,7 +1220,11 @@
+@@ -1115,7 +1243,11 @@
              {
                  if ((command.Engines & (1L << i)) == 0) continue;
                  EngineBinding e = engines[i];
@@ -2451,7 +2550,7 @@
                  // The alignment and ullage gates apply to new starts. An
                  // already armed RF engine consumes a relight if throttle drops to zero.
                  if (!e.Burning && !(e.Issued && e.Engine.EngineIgnited)) continue;
-@@ -1145,7 +1254,7 @@
+@@ -1145,7 +1277,7 @@
                  thrust = mass * netUp / projection;
              }
              if (!command.Emergency)
@@ -2460,7 +2559,7 @@
              // A nonzero RF throttle requests actual ignition. Its physical floor
              // is handled by the group planner.
              throttle = high > low ? Mathf.Clamp((float)((thrust - low) / (high - low)), (float)Settings.MinimumPositiveThrottle, 1) : 1;
-@@ -1288,6 +1397,7 @@
+@@ -1288,6 +1420,7 @@
              input.pitch = rotationInput.x;
              input.roll = rotationInput.y;
              input.yaw = rotationInput.z;
@@ -2468,7 +2567,7 @@
              if (!independentThrottle) return;
              if (unmanagedEngines.Exists(e => e.Engine != null && e.Engine.isEnabled && e.Engine.moduleIsEnabled &&
                  e.Engine.EngineIgnited && !e.Engine.independentThrottle))
-@@ -1298,7 +1408,6 @@
+@@ -1298,7 +1431,6 @@
                  if (vessel == FlightGlobals.ActiveVessel) FlightInputHandler.state.mainThrottle = input.mainThrottle;
                  masterThrottleOwned = true;
              }
@@ -2476,7 +2575,7 @@
          }
  
          private void ReleaseMasterThrottle(FlightCtrlState input = null)
-@@ -1402,8 +1511,12 @@
+@@ -1402,8 +1534,12 @@
                  ",entry_burn_asl_m,entry_burn_speed_mps,effective_coast_pitch_aoa_deg,planned_join_mass_t,planned_final_throttle" +
                  ",body_coast_pitch_aoa_deg,final_gimbal_limit_deg,master_throttle_owned" +
                  ",hull_clearance_m,wheel_bottom_offset_m,support_colliders_active,foot_raycast_hits" +
@@ -2486,12 +2585,20 @@
 +                ",latitude_deg,longitude_deg,touchdown_estimate_status,touchdown_estimate_lat_deg,touchdown_estimate_lon_deg" +
 +                ",touchdown_waypoint_miss_m,touchdown_estimate_eta_s,touchdown_estimate_entry_s,touchdown_estimate_landing_burn_s" +
 +                ",touchdown_waypoint_bearing_deg,touchdown_waypoint_east_m,touchdown_waypoint_north_m" +
-+                BoostbackTraceColumns + ",render_frame,render_dt_s,far_total_calls,far_total_ms,far_peak_frame_ms");
++                BoostbackTraceColumns + ",render_frame,render_dt_s,far_total_calls,far_total_ms,far_peak_frame_ms,targeted_glide_tolerance_m");
 +            engineTrace.WriteLine("ut,bit,flight_id,part,rf,ignitions,ullage,min_kn,max_kn,actual_kn,spool_s,spool_source,available,issued,faulted,armed,flameout,previous_throttle,rf_combusting,vessel_throttle,engine_propellant_available,remotetech_connected,engine_independent_throttle_fraction,is_solid,activate_ut");
              for (int i = 0; i < engines.Count; i++)
                  Debug.LogFormat("[RetroLanding] bit {0}: {1} flightID={2}", i, engines[i].Engine.part.name, engines[i].Engine.part.flightID);
              lastMask = -1;
-@@ -1423,14 +1536,15 @@
+@@ -1416,27 +1552,28 @@
+         private void WriteTrace(double now, Flight s, Command c, double error, double thrust, int supports,
+                                 double upright, GroundReading ground, double targetProjection, double horizontalSpeed,
+                                 bool unpoweredCoast, int enginesFiring, Vector3d velocity, Vector3d pointing, double rollError,
+-                                double bodyPitchAoa, double rollRate)
++                                double bodyPitchAoa, double coastPitchAoa, double rollRate)
+         {
+             if (trace == null || (now < nextLog && c.Phase == lastPhase && c.Engines == lastMask &&
+                 c.YoloTrigger == null && c.YoloInhibit == lastYoloInhibit && c.YoloState == lastYoloState)) return;
              double requestedG = c.Engines == 0 ? 0 : Controller.Norm(c.Up, c.X) / Settings.G0;
              if (c.Engines != 0 && c.UsesTerminalGuidance && s.Running != 0)
                  requestedG = Math.Max(0, c.Up - s.ExternalUpAcceleration) / (Settings.G0 * Math.Max(0.5, targetProjection));
@@ -2509,14 +2616,32 @@
                  s.GearCommanded, deployed, gearModules.Count, c.Emergency, supports, vessel.situation,
                  Math.Acos(Math.Max(-1, Math.Min(1, upright))) * 180 / Math.PI, s.LateralThrustDirection,
                  c.Reason.Replace("\"", "\"\""), c.YoloTrigger,
-@@ -1478,19 +1592,22 @@
+                 double.IsInfinity(c.CappedPlanMargin) ? "" : c.CappedPlanMargin.ToString("F2", Invariant),
+                 ground.SeaLevelHeight, ground.Distance, ground.BottomOffset,
+-                surface != null ? "raycast" : rawSurface != null ? "pqs" : "vessel_terrain_altitude",
++                ground.WaterSurface ? "ocean_surface" : surface != null ? "raycast" : rawSurface != null ? "pqs" : "vessel_terrain_altitude",
+                 surface == null ? "" : surface.name.Replace("\"", "\"\""),
+                 surface == null ? "" : surface.gameObject.layer.ToString(Invariant),
+                 surface == null ? "" : surface.GetInstanceID().ToString(Invariant), c.PlannedTerminalSeconds,
+@@ -1467,7 +1604,7 @@
+                 independentThrottle) + steering + string.Format(Invariant, ",{0:F1},{1:F2},{2:F2},{3},{4},{5:F2},{6},{7:F2},{8:F2},{9:F2},{10},{11},{12},{13},{14}",
+                 c.PropellantShortfallKg, cfg.CoastPitchAoaDegrees, cfg.MaxIgnitionAltitude, cfg.IgnitionAltitudeBlocked(s.Height),
+                 RcsEnabled, TimeWarp.CurrentRate, s.SolidBurnActive, cfg.EntryBurnAltitude, cfg.EntryBurnSpeed,
+-                c.Phase == Phase.EntryBurn ? 0 : cfg.CoastPitchAoaAt(s.SeaLevelAltitude),
++                c.Phase == Phase.Coast ? coastPitchAoa : 0,
+                 c.PlannedJoinMass > 0 ? c.PlannedJoinMass.ToString("F3", Invariant) : "",
+                 double.IsNaN(c.PlannedFinalThrottle) ? "" : c.PlannedFinalThrottle.ToString("F4", Invariant),
+                 double.IsNaN(bodyPitchAoa) ? "" : bodyPitchAoa.ToString("F2", Invariant),
+@@ -1478,19 +1615,24 @@
                  string.Format(Invariant, ",{0},{1},{2:F4},{3:F4}",
                      retrogradePitch.Authority > 0 ? (retrogradePitch.Authority / AttitudeGuidance.Degree).ToString("F3", Invariant) : "",
                      retrogradeYaw.Authority > 0 ? (retrogradeYaw.Authority / AttitudeGuidance.Degree).ToString("F3", Invariant) : "",
 -                    vessel.ctrlState.pitch, vessel.ctrlState.yaw));
 +                    vessel.ctrlState.pitch, vessel.ctrlState.yaw) + FootprintTrace() + BoostbackTrace(now) +
-+                string.Format(Invariant, ",{0},{1:F4},{2},{3:F3},{4:F3}", Time.frameCount, Time.unscaledDeltaTime,
-+                    farCoast.QueryCount, farCoast.QueryMilliseconds, farCoast.TakePeakFrameMilliseconds()));
++                string.Format(Invariant, ",{0},{1:F4},{2},{3:F3},{4:F3},{5}", Time.frameCount, Time.unscaledDeltaTime,
++                    farCoast.QueryCount, farCoast.QueryMilliseconds, farCoast.TakePeakFrameMilliseconds(),
++                    c.Phase == Phase.Coast && targeted?.Leg == TargetedLeg.Recovery && !targeted.StandardFallback
++                        ? TargetedLandingGuidance.GlideTolerance(s.SeaLevelAltitude, targeted.Height, cfg).ToString("F2", Invariant) : ""));
              for (int i = 0; i < engines.Count; i++)
              {
                  EngineBinding e = engines[i];
@@ -2535,7 +2660,7 @@
              }
              lastPhase = c.Phase;
              if (lastMask >= 0 && c.Engines != lastMask) BankChanges++;
-@@ -1504,6 +1621,9 @@
+@@ -1504,6 +1646,9 @@
          {
              Mode prior = mode;
              mode = Mode.Off;

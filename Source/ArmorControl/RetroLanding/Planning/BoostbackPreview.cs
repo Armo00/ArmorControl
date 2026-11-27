@@ -41,8 +41,7 @@ namespace LandingPoc
 
     internal sealed class BoostbackPreviewResult
     {
-        internal string Status, GlideWarning;
-        internal bool UseStandardLanding;
+        internal string Status;
         internal BoostbackApproach GlideApproach;
         internal int Footprints, ScreenedFootprints, VerifiedCandidates;
         internal double FirstFlyableMilliseconds = double.NaN, RunMilliseconds;
@@ -87,8 +86,7 @@ namespace LandingPoc
         internal static BoostbackPreviewResult Plan(BoostbackPreviewInput input, CancellationToken stop, bool includeGlide = true)
         {
             if (input?.Settings != null && !(input.MinimumAoa <= input.DefaultAoa && input.DefaultAoa <= input.MaximumAoa))
-                return new BoostbackPreviewResult { Status = "invalid_aoa_range", UseStandardLanding = true,
-                    GlideWarning = "invalid_aoa_range" };
+                return new BoostbackPreviewResult { Status = "invalid_aoa_range" };
             if (!Valid(input)) return new BoostbackPreviewResult { Status = "invalid_snapshot" };
             return new BoostbackPreview(input, stop).Plan(includeGlide);
         }
@@ -147,15 +145,6 @@ namespace LandingPoc
             var preferredAir = usePreferred ? PitchAtmosphere(input.PreferredGlideAoa) : null;
             BoostbackApproach retained = preferredAir == null ? null :
                 Trace(null, 0, 0, input.PreferredGlideAoa, preferredAir, input.PreferredGlideBank);
-            if (includeGlide && Reached(retained))
-            {
-                output.Baseline = output.DefaultAoa = retained;
-                output.FirstFlyableMilliseconds = elapsed.Elapsed.TotalMilliseconds;
-                output.Footprints = footprints;
-                output.RunMilliseconds = elapsed.Elapsed.TotalMilliseconds;
-                SelectGlide(output, retained);
-                return output;
-            }
             BoostbackApproach baseline = !includeGlide && retained != null ? retained :
                 Trace(null, 0, 0, input.DefaultAoa, input.DefaultAtmosphere);
             output.Baseline = baseline;
@@ -192,59 +181,40 @@ namespace LandingPoc
         private void PlanGlide(BoostbackPreviewResult output, BoostbackApproach boost,
             BoostbackApproach retained, bool checkedRetained)
         {
-            if (boost == null)
-            {
-                output.UseStandardLanding = true;
-                output.GlideWarning = "no_safe_default_approach";
-                var straight = Trace(null, 0, 0, 0, input.DefaultAtmosphere);
-                if (straight != null && straight.Safe) output.GlideApproach = straight;
-                return;
-            }
-
             // All glide trials use the same finite burn. The default setting
             // alone determines the boostback direction and cutoff.
+            boost = boost ?? output.Baseline ?? new BoostbackApproach();
             var bank = boost.Engines == 0 ? null :
                 new EngineGroups(input.Engines, input.BackupTorque).MakeGroup(boost.Engines);
-            if (Reached(boost))
-            {
-                output.GlideApproach = boost;
-                return;
-            }
-
-            BoostbackApproach bestEdge = null, bestGlide = boost;
+            BoostbackApproach bestGlide = boost.Safe ? boost : null;
             if (input.PreferredGlideAoa >= input.MinimumAoa && input.PreferredGlideAoa <= input.MaximumAoa &&
                 FootprintAtmosphere.Finite(input.PreferredGlideBank))
             {
                 if (!checkedRetained) retained = ProbeGlide(boost, bank, input.PreferredGlideAoa, input.PreferredGlideBank);
-                if (Reached(retained))
-                {
-                    SelectGlide(output, retained);
-                    return;
-                }
                 if (Better(retained, bestGlide)) bestGlide = retained;
-                if ((input.PreferredGlideAoa == input.MinimumAoa || input.PreferredGlideAoa == input.MaximumAoa) &&
-                    Better(retained, bestEdge)) bestEdge = retained;
             }
-            output.MinimumAoa = ProbeGlide(boost, bank, input.MinimumAoa, 0);
-            output.MaximumAoa = input.MaximumAoa == input.MinimumAoa ? output.MinimumAoa :
-                ProbeGlide(boost, bank, input.MaximumAoa, 0);
-            double[] pitches = { input.MinimumAoa, (input.MinimumAoa + input.DefaultAoa) * 0.5, input.DefaultAoa,
-                (input.DefaultAoa + input.MaximumAoa) * 0.5, input.MaximumAoa };
-            double[] banks = { 0, 30, -30, 45, -45, 90, -90, 135, -135, 180 };
-            foreach (double pitch in pitches.Distinct())
+
+            // A usable retained attitude only needs local refinement. Search
+            // the full configured range on the first pass or after a miss.
+            if (!Reached(retained))
             {
-                foreach (double roll in banks)
+                output.MinimumAoa = ProbeGlide(boost, bank, input.MinimumAoa, 0);
+                output.MaximumAoa = input.MaximumAoa == input.MinimumAoa ? output.MinimumAoa :
+                    ProbeGlide(boost, bank, input.MaximumAoa, 0);
+                double[] pitches = { input.MinimumAoa, (input.MinimumAoa + input.DefaultAoa) * 0.5, input.DefaultAoa,
+                    (input.DefaultAoa + input.MaximumAoa) * 0.5, input.MaximumAoa };
+                double[] banks = { 0, 30, -30, 45, -45, 90, -90, 135, -135, 180 };
+                foreach (double pitch in pitches.Distinct())
                 {
-                    BoostbackApproach trial = roll == 0 && pitch == input.MinimumAoa ? output.MinimumAoa :
-                        roll == 0 && pitch == input.MaximumAoa ? output.MaximumAoa : ProbeGlide(boost, bank, pitch, roll);
-                    if (Better(trial, bestGlide)) bestGlide = trial;
-                    if ((pitch == input.MinimumAoa || pitch == input.MaximumAoa) && Better(trial, bestEdge))
-                        bestEdge = trial;
-                    if (!Reached(bestGlide)) continue;
-                    SelectGlide(output, bestGlide);
-                    return;
+                    foreach (double roll in banks)
+                    {
+                        BoostbackApproach trial = roll == 0 && pitch == input.MinimumAoa ? output.MinimumAoa :
+                            roll == 0 && pitch == input.MaximumAoa ? output.MaximumAoa : ProbeGlide(boost, bank, pitch, roll);
+                        if (Better(trial, bestGlide)) bestGlide = trial;
+                    }
                 }
             }
+            if (bestGlide == null) return;
 
             // Refine the best neighborhood before treating the bounded search
             // as a miss. Moving the bank and the pitch remains independent.
@@ -261,21 +231,13 @@ namespace LandingPoc
                         if (pitch == centerPitch && roll == centerRoll) continue;
                         BoostbackApproach trial = ProbeGlide(boost, bank, pitch, roll);
                         if (Better(trial, bestGlide)) bestGlide = trial;
-                        if ((pitch == input.MinimumAoa || pitch == input.MaximumAoa) && Better(trial, bestEdge))
-                            bestEdge = trial;
-                        if (!Reached(bestGlide)) continue;
-                        SelectGlide(output, bestGlide);
-                        return;
                     }
                 }
                 pitchStep *= 0.5;
             }
 
-            output.UseStandardLanding = true;
-            bool sampledBounds = PitchAtmosphere(input.MinimumAoa) != null && PitchAtmosphere(input.MaximumAoa) != null;
-            output.GlideWarning = !sampledBounds ? "aoa_samples_unavailable" :
-                bestEdge == null ? "no_safe_aoa_boundary" : "waypoint_outside_tested_aoa_range";
-            output.GlideApproach = bestEdge ?? boost;
+            output.GlideApproach = bestGlide;
+            if (Reached(bestGlide)) SelectGlide(output, bestGlide);
         }
 
         private static void SelectGlide(BoostbackPreviewResult output, BoostbackApproach approach)

@@ -6,6 +6,9 @@ namespace LandingPoc
     {
         private const double Degree = Math.PI / 180;
 
+        internal static double ContactSurfaceDistance(double terrainDistance, double seaLevelHeight, bool hasOcean) =>
+            hasOcean ? Math.Min(terrainDistance, seaLevelHeight) : terrainDistance;
+
         internal static void Destination(double latitude, double longitude, double north, double east, double radius,
                                          out double resultLatitude, out double resultLongitude)
         {

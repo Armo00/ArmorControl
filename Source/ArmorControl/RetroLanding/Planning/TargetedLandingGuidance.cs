@@ -4,13 +4,31 @@ namespace LandingPoc
 {
     internal enum BoostbackStage { Aligning, Initial, Full, Fine }
 
+    internal struct BoostbackCutoffTrend
+    {
+        private double? previousUt;
+        private double previousMiss;
+        internal bool EnteredWindow { get; private set; }
+
+        internal bool Observe(double ut, double miss)
+        {
+            if (previousUt.HasValue && ut <= previousUt.Value) return false;
+            bool increasing = EnteredWindow && miss > previousMiss;
+            previousUt = ut;
+            previousMiss = miss;
+            EnteredWindow |= miss <= TargetedLandingGuidance.BoostbackCutoffWindow;
+            return increasing;
+        }
+    }
+
     internal static class TargetedLandingGuidance
     {
-        // This is the boostback handoff tolerance. Powered guidance still
-        // tries to reduce the position and velocity error toward zero.
+        // The initial plan and the end of targeted glide use the same radius.
         internal const double ApproachTolerance = 250;
         internal const double FullBoostbackAngle = 3;
-        internal const double BoostbackCutoffDistance = 1000;
+        internal const double BoostbackCutoffWindow = 2500;
+        internal const double BoostbackCutoffDistance = 300;
+        internal const double InitialGlideTolerance = 3000;
         internal const double BoostbackImpulseLimit = 1.5;
         internal const double MainCorrectionInterval = 1.0;
         internal const double FineCorrectionInterval = 0.5;
@@ -25,6 +43,20 @@ namespace LandingPoc
 
         internal static bool MayStartBoostback(double clearance, double verticalSpeed, Settings settings) =>
             verticalSpeed >= 0 || settings.IgnitionAltitudeBlocked(clearance);
+
+        internal static bool GlideConflictsWithIgnition(Settings settings, double clearance, double waitSeconds,
+            double glideAngle, double alignmentAngle, double turnDegreesPerSecond) =>
+            !settings.IgnitionAltitudeBlocked(clearance) && glideAngle > Settings.IgnitionToleranceDegrees &&
+            waitSeconds <= Math.Max(glideAngle, alignmentAngle) / Math.Max(1, turnDegreesPerSecond) + 2 * settings.SampleSeconds;
+
+        internal static double GlideTolerance(double altitude, double targetHeight, Settings settings)
+        {
+            double lower = targetHeight + Math.Max(0, settings.MaxIgnitionAltitude);
+            double span = settings.EntryBurnAltitude - lower;
+            if (span <= 0) return ApproachTolerance;
+            double fraction = Math.Max(0, Math.Min(1, (altitude - lower) / span));
+            return ApproachTolerance + fraction * (InitialGlideTolerance - ApproachTolerance);
+        }
 
         internal static BoostbackStage BoostbackStageFor(BoostbackStage stage, double angle,
             bool initialEstablished, double remaining, double miss,
@@ -55,10 +87,14 @@ namespace LandingPoc
                 axis * (axis.Dot(from) * (1 - Math.Cos(angle)));
         }
 
-        internal static string BoostbackCutoffReason(double delivered, double planned, BoostbackApproach cutoffForecast)
+        internal static string BoostbackCutoffReason(double delivered, double planned, BoostbackApproach cutoffForecast,
+            double forecastUt, ref BoostbackCutoffTrend trend)
         {
             if (planned > 0 && delivered > planned * BoostbackImpulseLimit) return "impulse_limit";
-            return IsBoostbackCutoffTarget(cutoffForecast) ? "predicted_target" : null;
+            if (cutoffForecast?.Safe != true || !FootprintAtmosphere.Finite(cutoffForecast.MissDistance) ||
+                !FootprintAtmosphere.Finite(forecastUt)) return null;
+            if (IsBoostbackCutoffTarget(cutoffForecast)) return "predicted_target";
+            return trend.Observe(forecastUt, cutoffForecast.MissDistance) ? "predicted_distance_increasing" : null;
         }
 
         internal static bool IsBoostbackCutoffTarget(BoostbackApproach forecast) =>

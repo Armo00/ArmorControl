@@ -13,17 +13,18 @@ namespace KspRetroLanding
             ",boostback_aim_east,boostback_aim_north,boostback_aim_up,boostback_thrust_east_kn,boostback_thrust_north_kn,boostback_thrust_up_kn" +
             ",boostback_correction_ms,boostback_correction_traces,targeted_last_search_ms,targeted_last_search_traces" +
             ",boostback_first_activate_ut,boostback_activate_angle_deg,boostback_first_thrust_ut" +
-            ",boostback_first_body_angle_deg,boostback_first_thrust_angle_deg";
+            ",boostback_first_body_angle_deg,boostback_first_thrust_angle_deg" +
+            ",boostback_cut_now_aoa_deg,boostback_cut_now_bank_deg";
 
         private string BoostbackTrace(double now)
         {
             var active = targeted;
-            if (active?.Boost == null) return new string(',', 31);
+            if (active?.Boost == null) return new string(',', 33);
             var correction = active.Correction;
             var cut = correction?.CutNow;
             var repaired = correction?.AfterCorrection;
             return string.Format(Invariant,
-                ",{0},{1:F2},{2:F2},{3:F2},{4:F2},{5},{6},{7},{8},{9},{10},{11},{12},{13},{14},{15},{16:F5},{17:F5},{18:F5},{19:F2},{20:F2},{21:F2},{22},{23},{24:F3},{25},{26},{27},{28},{29},{30}",
+                ",{0},{1:F2},{2:F2},{3:F2},{4:F2},{5},{6},{7},{8},{9},{10},{11},{12},{13},{14},{15},{16:F5},{17:F5},{18:F5},{19:F2},{20:F2},{21:F2},{22},{23},{24:F3},{25},{26},{27},{28},{29},{30},{31},{32}",
                 active.BoostStage, active.Boost.BoostThrustDeltaV, active.DeliveredMagnitude, active.Delivered, active.TrimMinimum,
                 active.CutoffReason, Number(correction == null ? double.NaN : active.CorrectionAt),
                 Number(correction == null ? double.NaN : now - active.CorrectionAt),
@@ -36,7 +37,8 @@ namespace KspRetroLanding
                 Number(correction?.ElapsedMilliseconds ?? double.NaN), correction?.Traces,
                 active.LastSearchMilliseconds, active.LastSearchTraces,
                 Number(active.FirstActivationAt), Number(active.FirstActivationAngle), Number(active.FirstThrustAt),
-                Number(active.FirstBodyAngle), Number(active.FirstThrustAngle));
+                Number(active.FirstBodyAngle), Number(active.FirstThrustAngle),
+                Number(cut?.PitchAoa ?? double.NaN), Number(cut?.GlideBank ?? double.NaN));
 
             string Number(double value) => FootprintAtmosphere.Finite(value) ? value.ToString("F3", Invariant) : "";
         }

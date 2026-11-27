@@ -127,6 +127,7 @@ namespace LandingPoc
         public double IgnitionAlignmentSeconds;
         internal double BoostbackIgnitionAngle;
         internal bool PrepareBoostbackUllage;
+        internal bool PrepareLandingAttitude;
         public bool DeployGear, Emergency, VerticalOnly;
         public string Reason;
         public string YoloTrigger;
@@ -2305,9 +2306,13 @@ namespace LandingPoc
                     {
                         if (plan.Wait > cfg.SampleSeconds * 1.5 || s.Vz > 0 ||
                             (direct && RelightAlignment(s, plan.RelightX, plan.RelightUp) > 0))
-                            return direct
+                        {
+                            Command coast = direct
                                 ? Output(s, 0, plan.RelightX, plan.RelightUp, "coast, align for terminal relight")
                                 : AlignForMain(s, 0, "coast, align for planned main burn");
+                            coast.PrepareLandingAttitude = s.Vz < 0;
+                            return coast;
+                        }
                         selected = plan.Main.Mask;
                         phase = direct ? Phase.Final : Phase.Main;
                         if (direct)
