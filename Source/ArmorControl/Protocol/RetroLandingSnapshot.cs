@@ -14,7 +14,14 @@ namespace ArmorOverhaul.ArmorControl.Protocol
         internal string Status;
         internal string Reason;
         internal RetroLandingFlight? Flight;
+        internal RetroLandingResult LandingResult;
         internal RetroEngineBaySnapshot EngineBay;
+    }
+
+    internal sealed class RetroLandingResult
+    {
+        internal string Waypoint, Settling;
+        internal double Ut, Latitude, Longitude, MissDistance, MissEast, MissNorth;
     }
 
     internal sealed class RetroTargetedSnapshot

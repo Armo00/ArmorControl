@@ -217,6 +217,7 @@ namespace KspRetroLanding
                 GUIStyle.none, GUI.skin.verticalScrollbar, GUILayout.ExpandWidth(true), GUILayout.ExpandHeight(true));
             GUILayout.BeginVertical(GUILayout.Width(panelLayout.ContentWidth), GUILayout.ExpandWidth(false));
             Vessel active = FlightGlobals.ActiveVessel;
+            DrawLastLanding(active);
             if (active != null && active.loaded && active.ReferenceTransform != null)
                 engineBay.Draw(active, IsIdle ? null : engines, IsIdle ? 0 : Math.Max(0, lastMask), panelLayout, panelLabel);
             DrawSettings();
@@ -581,6 +582,7 @@ namespace KspRetroLanding
                     suspendedForWarp = false;
                     Debug.Log("[RetroLanding] Resumed from on-rails warp.");
                 }
+                if (landingApproach?.Work != null) PollLandingApproach(Planetarium.GetUniversalTime());
                 if (settleDeadline > 0) SettleOnLegs();
                 else Step();
             }
@@ -986,7 +988,8 @@ namespace KspRetroLanding
 
         private void BeginTouchdown(double now)
         {
-            if (vessel.Splashed || supportWheels.Count < 3)
+            RecordTouchdown(now);
+            if (vessel.Splashed || supportWheels.Count == 0)
             {
                 StopMode("Contact confirmed. Throttle released.", true);
                 return;
@@ -1010,16 +1013,36 @@ namespace KspRetroLanding
             double now = Planetarium.GetUniversalTime();
             Vector3 up = (Vector3)(vessel.CoMD - vessel.mainBody.position).normalized;
             rotationInput = TrackAttitude(up, 0, 0, true, now: now);
-            int supported = supportWheels.FindAll(w => w != null && w.isGrounded).Count;
+            if (vessel.Splashed)
+            {
+                SetLandingOutcome("splash", now);
+                StopMode("Water contact confirmed. Throttle released.", true);
+                return;
+            }
+            int supported = 0;
+            foreach (ModuleWheelBase wheel in supportWheels)
+                if (wheel != null && wheel.isGrounded) supported++;
             Rigidbody root = vessel.rootPart.rb;
-            bool settled = supported >= 3 && vessel.srf_velocity.sqrMagnitude < 0.25 &&
-                root != null && root.angularVelocity.sqrMagnitude < 0.0025f;
+            bool settled = TargetedLandingGuidance.IsLandingSettled(vessel.Landed, vessel.Splashed, supported,
+                vessel.srf_velocity.sqrMagnitude, root == null ? double.PositiveInfinity : root.angularVelocity.sqrMagnitude,
+                Vector3.Dot(frame.up, up));
+            if (now >= nextSettlingLog)
+            {
+                nextSettlingLog = now + 0.1;
+                WriteLandingOutcome("settling", now);
+            }
             if (!settled) supportedSince = double.NaN;
             else if (double.IsNaN(supportedSince)) supportedSince = now;
             if (now - supportedSince >= 2)
+            {
+                SetLandingOutcome("stable", now);
                 StopMode("Landing stable. Throttle released.", true);
+            }
             else if (now >= settleDeadline)
+            {
+                SetLandingOutcome("unsettled", now);
                 StopMode("Touchdown detected, but the vessel did not settle.", true);
+            }
         }
 
         private GroundReading ReadGround(Vector3d up, Vector3d lateral, double verticalSpeed)
@@ -1282,7 +1305,9 @@ namespace KspRetroLanding
                 if (ready && !e.Burning && !e.Issued && e.CanStart())
                 {
                     e.Activate(now);
-                    if (command.Phase == Phase.Boostback && e.Issued) RecordBoostbackActivation(now, alignment);
+                    if (e.Issued && command.Phase == Phase.Boostback) RecordBoostbackActivation(now, alignment);
+                    else if (e.Issued && (command.Phase == Phase.Main || command.Phase == Phase.Final || command.Phase == Phase.Yolo))
+                        RecordLandingIgnition(now, flight);
                 }
                 // The alignment and ullage gates apply to new starts. An
                 // already armed RF engine consumes a relight if throttle drops to zero.
@@ -1385,7 +1410,11 @@ namespace KspRetroLanding
             }
             // Roll around the thrust line, and give nose acquisition priority
             // if the vessel is still far from the requested direction.
-            double rollWeight = glideAttitude ? AttitudeGuidance.GlideRollPointingWeight(error.magnitude) :
+            bool boostback = phase == Phase.Boostback;
+            bool prioritizePointing = glideAttitude || boostback;
+            double rollWeight = boostback
+                ? AttitudeGuidance.RollPointingWeight(error.magnitude, TargetedLandingGuidance.FullBoostbackAngle)
+                : glideAttitude ? AttitudeGuidance.RollPointingWeight(error.magnitude) :
                 1 - Mathf.SmoothStep(0, 1, Mathf.InverseLerp(20, 65, error.magnitude * Mathf.Rad2Deg));
             if (phase == Phase.Final)
             {
@@ -1435,7 +1464,7 @@ namespace KspRetroLanding
             else if (previousRetrogradeAim.sqrMagnitude != 0)
                 ResetRetrogradeControl();
             input.z *= (float)yawAssist;
-            if (glideAttitude) input.y = (float)AttitudeGuidance.LimitGlideRoll(input.x, input.y, input.z);
+            if (prioritizePointing) input.y = (float)AttitudeGuidance.LimitRollForPointing(input.x, input.y, input.z);
             if (trace != null) yawCommand = new LandingYawSample(now, error.z, body != null ? (double)rate.z : double.NaN, input.z);
             return input;
         }
@@ -1567,6 +1596,7 @@ namespace KspRetroLanding
             string directory = RecoveryLogDirectory;
             Directory.CreateDirectory(directory);
             string stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmssfff", Invariant);
+            StartLandingOutcome(directory, stamp);
             trace = File.CreateText(Path.Combine(directory, "flight-" + stamp + ".csv"));
             trace.AutoFlush = true;
             engineTrace = File.CreateText(Path.Combine(directory, "flight-engines-" + stamp + ".csv"));
@@ -1585,7 +1615,7 @@ namespace KspRetroLanding
                 ",touchdown_waypoint_miss_m,touchdown_estimate_eta_s,touchdown_estimate_entry_s,touchdown_estimate_landing_burn_s" +
                 ",touchdown_waypoint_bearing_deg,touchdown_waypoint_east_m,touchdown_waypoint_north_m" +
                  BoostbackTraceColumns + ",render_frame,render_dt_s,far_total_calls,far_total_ms,far_peak_frame_ms,targeted_glide_tolerance_m" +
-                 LandingYawSample.Columns);
+                 LandingYawSample.Columns + ",boostback_ignition_limit_deg");
             engineTrace.WriteLine("ut,bit,flight_id,part,rf,ignitions,ullage,min_kn,max_kn,actual_kn,spool_s,spool_source,available,issued,faulted,armed,flameout,previous_throttle,rf_combusting,vessel_throttle,engine_propellant_available,remotetech_connected,engine_independent_throttle_fraction,is_solid,activate_ut");
             for (int i = 0; i < engines.Count; i++)
                 Debug.LogFormat("[RetroLanding] bit {0}: {1} flightID={2}", i, engines[i].Engine.part.name, engines[i].Engine.part.flightID);
@@ -1667,7 +1697,8 @@ namespace KspRetroLanding
                     farCoast.QueryCount, farCoast.QueryMilliseconds, farCoast.TakePeakFrameMilliseconds(),
                     c.Phase == Phase.Coast && targeted?.Leg == TargetedLeg.Recovery && !targeted.StandardFallback
                          ? TargetedLandingGuidance.GlideTolerance(s.SeaLevelAltitude, targeted.Height, cfg).ToString("F2", Invariant) : "") +
-                 yawWritten.ToCsv(Invariant));
+                 yawWritten.ToCsv(Invariant) + (c.Phase == Phase.Boostback && c.Engines != 0
+                     ? "," + c.BoostbackIgnitionAngle.ToString("F2", Invariant) : ","));
             for (int i = 0; i < engines.Count; i++)
             {
                 EngineBinding e = engines[i];
@@ -1694,6 +1725,7 @@ namespace KspRetroLanding
         {
             Mode prior = mode;
             mode = Mode.Off;
+            CloseLandingOutcome(onContact);
             StopTargeted();
             ResetFootprint();
             controller?.CancelCatalogSearch();

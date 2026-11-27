@@ -570,8 +570,6 @@ namespace LandingPoc
             double clock = 0;
             double remaining = trial.DeltaV;
             double cap = input.Settings.ThrustLimitFor(Phase.Boostback) * Settings.G0;
-            double timeToGround = (flight.Vz + Math.Sqrt(flight.Vz * flight.Vz +
-                2 * input.Settings.Gravity * (flight.SeaLevelAltitude - input.WaypointHeight))) / input.Settings.Gravity;
             EngineGroup lit = null;
             long requested = 0;
             double ignitionAt = double.PositiveInfinity, readyAt = 0;
@@ -588,9 +586,10 @@ namespace LandingPoc
                 else
                 {
                     double angle = Math.Acos(Math.Max(-1, Math.Min(1, axis.Dot(direction)))) / Degree;
-                    double fineAcceleration = Math.Min(cap, precision.Max / flight.Mass);
+                    // The initial burn estimate has no rolling cutoff forecast.
+                    // Live guidance chooses Fine from the resulting cutoff miss.
                     stage = TargetedLandingGuidance.BoostbackStageFor(stage, angle, lit != null,
-                        remaining, remaining * Math.Max(1, timeToGround - clock), fineAcceleration, input.Settings);
+                        double.PositiveInfinity, input.Settings);
                     long mask = TargetedLandingGuidance.BoostbackMask(stage, precision.Mask, full.Mask);
                     if (mask != requested)
                     {

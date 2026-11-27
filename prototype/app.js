@@ -1201,7 +1201,9 @@
     start.dataset.targetVesselId = useVessel ? landing?.vesselTargetId || '' : '';
     start.hidden = Boolean(landing?.active) || (live && !supported && !vesselSupported);
     start.disabled = !live || (useVessel ? !landing?.vesselTargetId : !supported || !landing?.canStartTargeted);
-    const missLabel = targeted?.vesselTarget ? 'Landing target miss distance' : 'Waypoint miss distance';
+    const actualLanding = landing?.landingResult;
+    const missLabel = targeted?.vesselTarget || actualLanding?.waypoint
+      ? 'Landing target miss distance' : 'Waypoint miss distance';
     if (sourceText($('#retroMissLabel')) !== missLabel) $('#retroMissLabel').textContent = missLabel;
     const targetedStatus = $('#retroTargetedStatus');
     if (targeted) {
@@ -1238,7 +1240,9 @@
     $('#retroThrottle').textContent = Number.isFinite(message.suborbitalThrottle)
       ? retroReading(message.suborbitalThrottle * 100, 1, '%') : '—';
     $('#retroDrag').textContent = retroReading(message.suborbitalDrag, 2, ' m/s²');
-    const footprint = flight?.touchdown;
+    const footprint = actualLanding || flight?.touchdown;
+    const touchdownLabel = actualLanding ? 'Actual touchdown' : 'Estimated touchdown';
+    if (sourceText($('#retroTouchdownLabel')) !== touchdownLabel) $('#retroTouchdownLabel').textContent = touchdownLabel;
     const hasPoint = Number.isFinite(footprint?.latitude) && Number.isFinite(footprint?.longitude);
     $('#retroTouchdown').textContent = hasPoint
       ? retroReading(footprint.latitude, 5, '°') + ', ' + retroReading(footprint.longitude, 5, '°') : '—';
@@ -1254,12 +1258,18 @@
       waiting_aero: 'Waiting for an aerodynamic sample at the configured coast AoA.',
       no_plan: 'Touchdown estimate unavailable for the current descent.',
       horizon: 'Touchdown is outside the estimate window.',
-      hard_contact: 'The estimate predicts a fast contact.'
+      hard_contact: 'The estimate predicts a fast contact.',
+      settling: 'Stabilizing on the landing legs.',
+      stable: 'Landing stable.',
+      unsettled: 'Touchdown detected, but the vessel did not settle.',
+      splash: 'Water contact confirmed.',
+      interrupted: 'Stabilization interrupted.'
     };
     const parts = [];
-    if (footprint?.status && statuses[footprint.status]) parts.push(statuses[footprint.status]);
+    const footprintStatus = actualLanding ? actualLanding.settling : footprint?.status;
+    if (statuses[footprintStatus]) parts.push(statuses[footprintStatus]);
     if (hasPoint && footprint.atmospheric && !footprint.far) parts.push('Estimate uses a simplified aerodynamic model.');
-    if (hasPoint && !Number.isFinite(miss) && !targeted?.vesselTarget) parts.push('Select a KSP navigation waypoint to see the miss distance.');
+    if (!actualLanding && hasPoint && !Number.isFinite(miss) && !targeted?.vesselTarget) parts.push('Select a KSP navigation waypoint to see the miss distance.');
     footprintNote.textContent = parts.map(text => window.ArmorI18n?.t(text) || text).join(' ');
     footprintNote.hidden = parts.length === 0;
     for (const field of $$('[data-retro-setting]')) {

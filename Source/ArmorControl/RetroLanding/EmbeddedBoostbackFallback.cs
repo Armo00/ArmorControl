@@ -12,7 +12,7 @@ namespace KspRetroLanding
         private sealed class BoostbackFallback
         {
             internal long LandingBank;
-            internal double NextEstimate, UpdatedAt, ImpactSeconds, ImpactSpeed, Remaining, Miss, ImpulseLimit;
+            internal double NextEstimate, UpdatedAt, ImpactSpeed, Remaining, Miss, ImpulseLimit;
             internal double NextFuelCheck, FuelLimit;
             internal long LastFuelBank;
             internal int SamplesFromSource;
@@ -90,7 +90,6 @@ namespace KspRetroLanding
             active.Boost.NorthDeltaV = northSpeed;
             fallback.Remaining = Controller.Norm(eastSpeed, northSpeed);
             fallback.Miss = fallback.Remaining * duration;
-            fallback.ImpactSeconds = seconds;
             fallback.ImpactSpeed = speed;
             fallback.UpdatedAt = now;
             fallback.SamplesFromSource = source == fallback.Source ? Math.Min(2, fallback.SamplesFromSource + 1) : 1;

@@ -70,13 +70,14 @@ namespace LandingPoc
             return blend * blend * (3 - 2 * blend);
         }
 
-        internal static double GlideRollPointingWeight(double pointingError)
+        internal static double RollPointingWeight(double pointingError, double zeroRollError = 20)
         {
-            double blend = Math.Max(0, Math.Min(1, (pointingError / Degree - 5) / 15));
+            double fullRollError = Math.Min(5, zeroRollError / 2);
+            double blend = Math.Max(0, Math.Min(1, (pointingError / Degree - fullRollError) / (zeroRollError - fullRollError)));
             return 1 - blend * blend * (3 - 2 * blend);
         }
 
-        internal static double LimitGlideRoll(double pitch, double roll, double yaw)
+        internal static double LimitRollForPointing(double pitch, double roll, double yaw)
         {
             // Budget roll from the normalized control left after pointing.
             double remaining = Math.Max(0, 1 - Math.Sqrt(pitch * pitch + yaw * yaw));

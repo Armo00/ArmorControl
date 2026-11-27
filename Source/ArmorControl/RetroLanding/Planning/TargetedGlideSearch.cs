@@ -27,6 +27,9 @@ namespace LandingPoc
             }
 
             BoostbackApproach best = held?.Safe == true ? held : null;
+            BoostbackApproach reverse = null;
+            double heldSide = TargetedLandingGuidance.GlideSideCommand(heldPitch, heldBank);
+            double alongSpeed = Controller.Norm(input.EastSpeed, input.NorthSpeed);
             double[] pitches =
             {
                 input.DefaultAoa, (heldPitch + input.DefaultAoa) / 2, heldPitch,
@@ -50,12 +53,20 @@ namespace LandingPoc
                 }
             }
 
+            // Keep a reachable reduction on the current side whenever it can
+            // still make the window. A reversal must improve the cross-track
+            // result as well as the overall candidate score.
+            if (reverse != null && (best == null || !Reached(best) && Prefer(reverse, best) &&
+                TargetedLandingGuidance.ReversalImprovesCrossrange(reverse, best, input.EastSpeed, input.NorthSpeed, alongSpeed)))
+                best = reverse;
             if (best != null)
             {
                 output.GlideApproach = best;
                 if (Reached(best)) SelectGlide(output, best);
-                output.GlideDecision = ReferenceEquals(best, held) ? "hold_no_reachable_improvement" :
-                    Reached(best) ? "correct_into_tolerance" : "correct_toward_target";
+                if (ReferenceEquals(best, held)) output.GlideDecision = "hold_no_reachable_improvement";
+                else if (ReferenceEquals(best, reverse)) output.GlideDecision = "correct_reverse_side";
+                else if (SideDemand(best) < Math.Abs(heldSide)) output.GlideDecision = "correct_reduce_side";
+                else output.GlideDecision = Reached(best) ? "correct_into_tolerance" : "correct_toward_target";
             }
             else output.GlideDecision = "no_safe_glide";
 
@@ -63,6 +74,11 @@ namespace LandingPoc
             {
                 if (candidate?.Safe != true) return;
                 if (held?.Safe == true && candidate.MissDistance >= held.MissDistance) return;
+                if (TargetedLandingGuidance.GlideReversesSide(heldSide, candidate.PitchAoa, candidate.GlideBank))
+                {
+                    if (reverse == null || Prefer(candidate, reverse)) reverse = candidate;
+                    return;
+                }
                 if (best == null || Prefer(candidate, best)) best = candidate;
             }
 
@@ -113,7 +129,6 @@ namespace LandingPoc
         // Distance from the unbanked pitch plane. Both pitch and bank can
         // reduce the requested crossrange correction.
         private static double SideDemand(BoostbackApproach approach) =>
-            Math.Abs(Math.Sin(approach.PitchAoa * AttitudeGuidance.Degree) *
-                     Math.Sin(approach.GlideBank * AttitudeGuidance.Degree));
+            Math.Abs(TargetedLandingGuidance.GlideSideCommand(approach.PitchAoa, approach.GlideBank));
     }
 }

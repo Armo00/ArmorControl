@@ -560,16 +560,19 @@ namespace KspRetroLanding
                 active.TrimMinimum = latestMinimum;
                 active.TrimMeasurement = nextThrust;
             }
-            double angle = Vector3.Angle(frame.up, (Vector3)direction);
             var previous = active.BoostStage;
+            long previousMask = TargetedLandingGuidance.BoostbackMask(previous, precision, active.Boost.Engines);
+            bool useCorrection = previousMask != 0 && correction?.AfterCorrection != null &&
+                correction.Mask == previousMask && ReferenceMatches(active) &&
+                TargetedLandingGuidance.FollowBoostbackCorrection(previous, now - active.CorrectionAt, correction.HoldSeconds);
+            if (useCorrection) direction = BodyFixedBoostbackDirection(correction.Direction, up);
+            double angle = Vector3.Angle(frame.up, (Vector3)direction);
             double miss = TargetedLandingGuidance.CanGuideBoostback(estimate) ? estimate.MissDistance : double.PositiveInfinity;
             if (coarse) miss = fallback.Miss;
             var stage = TargetedLandingGuidance.BoostbackStageFor(previous, angle,
-                precision != 0 && (flight.EstablishedThrust & precision) == precision,
-                fallback != null && !coarse && estimate?.Safe == true ? double.PositiveInfinity : remaining, miss,
-                trimMaximum / flight.Mass, cfg);
-            if (coarse) stage = TargetedLandingGuidance.CoarseBoostbackStage(previous, stage, angle,
-                fallback.SamplesFromSource >= 2, miss, fallback.ImpactSeconds, trimMaximum / flight.Mass, cfg);
+                precision != 0 && (flight.EstablishedThrust & precision) == precision, miss, cfg);
+            if (coarse && fallback.SamplesFromSource < 2 && previous == BoostbackStage.Initial && stage == BoostbackStage.Full)
+                stage = previous;
             long mask = TargetedLandingGuidance.BoostbackMask(stage, precision, active.Boost.Engines);
             double minimum = active.TrimMinimum, maximum = trimMaximum;
             if (mask != 0 && mask != precision &&
@@ -587,7 +590,7 @@ namespace KspRetroLanding
             }
             double thrust = stage == BoostbackStage.Fine ? coarse ?
                 remaining * flight.Mass / TargetedLandingGuidance.CorrectionInterval(stage) : minimum : maximum;
-            if (coarse && stage == BoostbackStage.Full && angle > TargetedLandingGuidance.FullBoostbackAngle)
+            if (coarse && stage == BoostbackStage.Full && angle > TargetedLandingGuidance.BoostbackIgnitionAngle(stage, cfg))
                 thrust = minimum;
             if (fallback != null && mask != 0)
             {
@@ -601,20 +604,14 @@ namespace KspRetroLanding
                 if (available < minimum / flight.Mass * cfg.SampleSeconds) return false;
                 maximum = Math.Min(maximum, available * flight.Mass / cfg.SampleSeconds);
             }
-            if (mask != 0 && correction?.AfterCorrection != null && correction.Mask == mask && ReferenceMatches(active) &&
-                TargetedLandingGuidance.FollowBoostbackCorrection(stage, now - active.CorrectionAt, correction.HoldSeconds))
-            {
-                direction = BodyFixedBoostbackDirection(correction.Direction, up);
-                if (stage == BoostbackStage.Fine) thrust = correction.Thrust;
-            }
+            if (stage == BoostbackStage.Fine && useCorrection && correction?.Mask == mask) thrust = correction.Thrust;
             double acceleration = mask == 0 ? 0 :
                 TargetedLandingGuidance.BoundedBoostbackThrust(thrust, minimum, maximum) / flight.Mass;
             active.BoostStage = stage;
             command = new Command
             {
                 Phase = Phase.Boostback, Engines = mask, X = acceleration, PrepareBoostbackUllage = true,
-                BoostbackIgnitionAngle = stage == BoostbackStage.Initial ? cfg.BoostbackStartAoa :
-                    Math.Min(cfg.BoostbackStartAoa, TargetedLandingGuidance.FullBoostbackAngle),
+                BoostbackIgnitionAngle = TargetedLandingGuidance.BoostbackIgnitionAngle(stage, cfg),
                 Reason = stage == BoostbackStage.Aligning ? "Aligning for Boostback" :
                     stage == BoostbackStage.Initial ? "Boostback inner bank" :
                     stage == BoostbackStage.Fine ? "Boostback fine turn" :

@@ -88,6 +88,18 @@ namespace ArmorOverhaul.ArmorControl.Protocol
                 }
                 json.Append('}');
             }
+            if (value.LandingResult is RetroLandingResult result)
+            {
+                json.Append(",\"landingResult\":{\"ut\":").Append(Number(result.Ut));
+                AppendNullable(json, "waypoint", result.Waypoint);
+                Append(json, "settling", result.Settling);
+                Append(json, "latitude", result.Latitude);
+                Append(json, "longitude", result.Longitude);
+                Append(json, "missDistance", result.MissDistance);
+                Append(json, "missEast", result.MissEast);
+                Append(json, "missNorth", result.MissNorth);
+                json.Append('}');
+            }
             if (value.EngineBay != null) AppendRetroEngineBay(json, value.EngineBay);
             json.Append('}');
         }

@@ -209,7 +209,8 @@ namespace ArmorOverhaul.ArmorControl.Core
                 CanStartTargeted = !active && reason == null && KspLanding.HasTargetedWaypoint(vessel),
                 Targeted = active ? pilot.TargetedReadback : null,
                 Status = active ? pilot.CurrentPhase : vessel.id == lastVessel ? lastStatus : null,
-                Reason = reason, Flight = active ? pilot.FlightReadback : null, EngineBay = bay
+                Reason = reason, Flight = active ? pilot.FlightReadback : null, EngineBay = bay,
+                LandingResult = pilot.LastLandingFor(vessel)
             };
             snapshot.SuborbitalActive = active;
             snapshot.SuborbitalController = active ? "ArmorControl" : null;

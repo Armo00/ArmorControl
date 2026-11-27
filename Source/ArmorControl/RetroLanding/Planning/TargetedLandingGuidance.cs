@@ -25,7 +25,8 @@ namespace LandingPoc
     {
         // The initial plan and the end of targeted glide use the same radius.
         internal const double ApproachTolerance = 250;
-        internal const double FullBoostbackAngle = 3;
+        internal const double FullBoostbackAngle = 10;
+        internal const double FineBoostbackAngle = 3;
         internal const double BoostbackCutoffWindow = 2500;
         internal const double BoostbackCutoffDistance = 300;
         internal const double InitialGlideTolerance = 3000;
@@ -72,33 +73,50 @@ namespace LandingPoc
             return ApproachTolerance + fraction * (InitialGlideTolerance - ApproachTolerance);
         }
 
+        internal static double GlideSideCommand(double aoa, double bank) =>
+            Math.Sin(aoa * AttitudeGuidance.Degree) * Math.Sin(bank * AttitudeGuidance.Degree);
+
+        internal static bool GlideReversesSide(double heldSide, double aoa, double bank)
+        {
+            double side = GlideSideCommand(aoa, bank);
+            return Math.Abs(heldSide) > 1e-6 && Math.Abs(side) > 1e-6 && heldSide * side < 0;
+        }
+
+        internal static bool ReversalImprovesCrossrange(BoostbackApproach reversal, BoostbackApproach retained,
+            double eastSpeed, double northSpeed, double alongSpeed)
+        {
+            if (alongSpeed < 0.02) return true;
+            double original = retained.MissEast * northSpeed - retained.MissNorth * eastSpeed;
+            double revised = reversal.MissEast * northSpeed - reversal.MissNorth * eastSpeed;
+            return Math.Abs(revised) < Math.Abs(original);
+        }
+
         internal static BoostbackStage BoostbackStageFor(BoostbackStage stage, double angle,
-            bool initialEstablished, double remaining, double miss,
-            double precisionAcceleration, Settings settings)
+            bool initialEstablished, double cutoffMiss, Settings settings)
         {
             if (stage == BoostbackStage.Fine) return stage;
-            double fullAngle = Math.Min(FullBoostbackAngle, settings.BoostbackStartAoa);
             if (stage == BoostbackStage.Aligning)
                 return angle <= settings.BoostbackStartAoa ? BoostbackStage.Initial : stage;
-            if (stage == BoostbackStage.Initial && (angle > fullAngle || !initialEstablished)) return stage;
-            double fineImpulse = precisionAcceleration * Math.Max(1, settings.AttitudeResponseSeconds);
-            if (miss <= settings.BoostbackFineDistance || remaining <= fineImpulse)
-                return BoostbackStage.Fine;
-            return BoostbackStage.Full;
+            var next = cutoffMiss >= 0 && cutoffMiss <= settings.BoostbackFineDistance
+                ? BoostbackStage.Fine : BoostbackStage.Full;
+            if (stage == BoostbackStage.Initial && (!initialEstablished || angle > BoostbackIgnitionAngle(next, settings)))
+                return stage;
+            return next;
+        }
+
+        internal static double BoostbackIgnitionAngle(BoostbackStage stage, Settings settings) =>
+            stage == BoostbackStage.Full ? Math.Min(FullBoostbackAngle, settings.BoostbackStartAoa) :
+            stage == BoostbackStage.Fine ? Math.Min(FineBoostbackAngle, settings.BoostbackStartAoa) : settings.BoostbackStartAoa;
+
+        internal static bool IsLandingSettled(bool landed, bool splashed, int supports, double speedSquared,
+            double angularSpeedSquared, double upright)
+        {
+            return !splashed && (landed || supports >= 3) && speedSquared < 0.25 && angularSpeedSquared < 0.0025 &&
+                upright >= Math.Cos(30 * AttitudeGuidance.Degree);
         }
 
         internal static long BoostbackMask(BoostbackStage stage, long precision, long full) =>
             stage == BoostbackStage.Aligning ? 0 : stage == BoostbackStage.Full ? full : precision;
-
-        internal static BoostbackStage CoarseBoostbackStage(BoostbackStage previous, BoostbackStage proposed,
-            double angle, bool confirmed, double miss, double impactSeconds, double precisionAcceleration, Settings cfg)
-        {
-            if (proposed != BoostbackStage.Full) return proposed;
-            double earlierFineDistance = cfg.BoostbackFineDistance + Math.Min(cfg.BoostbackFineDistance,
-                0.5 * impactSeconds * precisionAcceleration);
-            if (angle <= FullBoostbackAngle && miss <= earlierFineDistance) return BoostbackStage.Fine;
-            return !confirmed && previous == BoostbackStage.Initial ? previous : proposed;
-        }
 
         internal static AttitudeVector Slew(AttitudeVector from, AttitudeVector to,
             AttitudeVector fallback, double radians)

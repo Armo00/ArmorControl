@@ -49,7 +49,7 @@ namespace LandingPoc
         public const double TerminalTurnBraking = 0.11;
         public double MaxG = 4;
         public double BoostbackMaxG = double.NaN, EntryMaxG = double.NaN;
-        public double BoostbackStartAoa = 110, BoostbackFineDistance = 15000;
+        public double BoostbackStartAoa = 110, BoostbackFineDistance = 8000;
 
         internal double ThrustLimitFor(Phase phase)
         {
