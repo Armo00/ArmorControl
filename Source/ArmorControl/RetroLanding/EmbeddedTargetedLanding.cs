@@ -42,6 +42,10 @@ namespace KspRetroLanding
             internal BoostbackCutoffTrend CutoffTrend;
             internal BoostbackStage BoostStage;
             internal float NextSearch, GlideSamplesDeadline, AeroDeadline;
+            internal float NextBoostbackRetry = float.PositiveInfinity;
+            internal double LastBoostbackPlanAt = double.NaN;
+            internal string LastBoostbackRejection;
+            internal BoostbackPreviewResult LastBoostbackPlan;
             internal bool StandardFallback, WaitingForEntry, ObservedAboveEntry;
             internal bool BoostUllageRequested, BoostIgnitionCommitted, UseJointPlan;
             internal FootprintAero BoostAero;
@@ -167,6 +171,7 @@ namespace KspRetroLanding
             if (active.Leg == TargetedLeg.Cutoff && active.CutoffReason == null)
                 active.CutoffReason = "safety_fallback";
             active.StandardFallback = true;
+            active.NextBoostbackRetry = float.PositiveInfinity;
             active.Warning = reason;
             active.Glide = null;
         }
@@ -178,10 +183,40 @@ namespace KspRetroLanding
             active.NextSearch = Time.realtimeSinceStartup + 1;
         }
 
+        private static void DeferBoostbackPlan(TargetedRecovery active, string reason, string warning)
+        {
+            active.LastBoostbackRejection = reason;
+            active.Leg = TargetedLeg.Recovery;
+            active.Warning = warning;
+            // Leave a background slot for the glide forecast between failed plans.
+            active.NextBoostbackRetry = Time.realtimeSinceStartup + 2;
+        }
+
+        private static void TargetedSearchUnavailable(TargetedRecovery active, TargetedSearch search,
+            double now, string reason, string warning)
+        {
+            if (search == TargetedSearch.Cutoff) return;
+            if (search == TargetedSearch.Boostback)
+            {
+                active.LastBoostbackPlan = null;
+                active.LastBoostbackPlanAt = now;
+                DeferBoostbackPlan(active, reason, warning);
+            }
+            else RetryTargetedGlide(active, warning);
+        }
+
         private static void AbortBoostback(TargetedRecovery active, string reason, string warning)
         {
             BeginBoostbackCutoff(active, reason);
             active.Warning = warning;
+        }
+
+        private void RequestBoostbackUllage(TargetedRecovery active)
+        {
+            if (active.BoostUllageRequested) return;
+            active.BoostUllageRequested = true;
+            if (!RcsEnabled && engines.Exists(engine => engine.NeedsUllage))
+                vessel.ActionGroups.SetGroup(KSPActionGroup.RCS, true);
         }
 
         internal RetroTargetedSnapshot TargetedReadback => targeted == null ? null : new RetroTargetedSnapshot
@@ -305,8 +340,9 @@ namespace KspRetroLanding
                 Debug.LogWarning("[RetroLanding] Targeted guidance failed: " + failure.Message);
                 if (targeted.Leg == TargetedLeg.Recovery || targeted.Leg == TargetedLeg.Planning)
                 {
+                    TargetedSearch search = targeted.Leg == TargetedLeg.Planning ? TargetedSearch.Boostback : targeted.Search;
                     CancelTargetedSearch(targeted);
-                    RetryTargetedGlide(targeted, "Targeted prediction failed. Retrying glide guidance.");
+                    TargetedSearchUnavailable(targeted, search, now, "guidance_exception", "Targeted prediction failed. Retrying.");
                     return false;
                 }
                 AbortBoostback(targeted, "boostback_guidance_failed", "Boostback guidance failed. Checking glide after cutoff.");
@@ -357,7 +393,15 @@ namespace KspRetroLanding
             {
                 if (!active.StandardFallback && UsesCoastAttitude(lastPhase, cfg.IgnitionAltitudeBlocked(flight.Height)) &&
                     (flight.Running | flight.Starting | flight.IssuedStarts) == 0)
-                    ScheduleTargetedSearch(active, TargetedSearch.Glide, flight, up, velocity, now);
+                {
+                    if (!TargetedLandingGuidance.MayStartBoostback(flight.Height, flight.Vz, cfg))
+                        active.NextBoostbackRetry = float.PositiveInfinity;
+                    bool retryBoostback = Time.realtimeSinceStartup >= active.NextBoostbackRetry &&
+                        TargetedLandingGuidance.CanRetryBoostback(flight, lastPhase, cfg);
+                    if (retryBoostback) RequestBoostbackUllage(active);
+                    ScheduleTargetedSearch(active, retryBoostback ? TargetedSearch.Boostback : TargetedSearch.Glide,
+                        flight, up, velocity, now);
+                }
                 return false;
             }
 
@@ -375,15 +419,11 @@ namespace KspRetroLanding
             {
                 if ((flight.Running | flight.Starting | flight.IssuedStarts) != 0)
                 {
-                    RetryTargetedGlide(active, "An engine is already running. Waiting for the glide window.");
+                    TargetedSearchUnavailable(active, TargetedSearch.Boostback, now, "thrust_already_active",
+                        "Waiting for separation thrust to clear before retrying Boostback.");
                     return false;
                 }
-                if (!active.BoostUllageRequested)
-                {
-                    active.BoostUllageRequested = true;
-                    if (!RcsEnabled && engines.Exists(engine => engine.NeedsUllage))
-                        vessel.ActionGroups.SetGroup(KSPActionGroup.RCS, true);
-                }
+                RequestBoostbackUllage(active);
                 ScheduleTargetedSearch(active, TargetedSearch.Boostback, flight, up, velocity, now);
                 if (active.Leg == TargetedLeg.Recovery) return false;
                 direction = RoughBoostbackDirection(active, flight, up, velocity);
@@ -527,6 +567,7 @@ namespace KspRetroLanding
             if (command.Phase == Phase.EntryBurn)
             {
                 targeted.WaitingForEntry = true;
+                CancelTargetedSearch(targeted);
                 return;
             }
             if (command.Phase == Phase.Coast && flight.SeaLevelAltitude < cfg.EntryBurnAltitude)
@@ -535,7 +576,10 @@ namespace KspRetroLanding
                 !cfg.IgnitionAltitudeBlocked(flight.Height))
                 FallBackTargeted(targeted, "Landing recovery took priority over the waypoint. Continuing with standard landing.");
             if (command.Phase == Phase.Main || command.Phase == Phase.Final || command.Phase == Phase.Landed)
+            {
+                targeted.NextBoostbackRetry = float.PositiveInfinity;
                 CancelTargetedSearch(targeted);
+            }
         }
 
         private Vector3d BoostbackDirection(TargetedRecovery active, Vector3d up)
@@ -566,8 +610,7 @@ namespace KspRetroLanding
             if (finished.Status != TaskStatus.RanToCompletion)
             {
                 _ = finished.Exception;
-                if (search != TargetedSearch.Cutoff)
-                    RetryTargetedGlide(active, "Targeted prediction failed. Retrying glide guidance.");
+                TargetedSearchUnavailable(active, search, now, "task_failed", "Targeted prediction failed. Retrying.");
                 return;
             }
 
@@ -586,40 +629,66 @@ namespace KspRetroLanding
             }
             if (search == TargetedSearch.Boostback)
             {
+                active.LastBoostbackPlan = plan;
+                active.LastBoostbackPlanAt = active.CapturedAt;
+                active.LastBoostbackRejection = null;
                 if (!TargetedLandingGuidance.MayStartBoostback(flight.Height, flight.Vz, cfg))
                 {
+                    active.LastBoostbackRejection = "window_closed";
                     active.Leg = TargetedLeg.Recovery;
+                    active.NextBoostbackRetry = float.PositiveInfinity;
                     active.NextSearch = 0;
+                    return;
                 }
-                else if (now - active.CapturedAt > 1)
+                if (now - active.CapturedAt > 1)
                 {
+                    active.LastBoostbackRejection = "stale_plan";
+                    if (active.Leg == TargetedLeg.Recovery)
+                        DeferBoostbackPlan(active, "stale_plan", "Boostback prediction expired. Retrying from a fresh flight state.");
                     active.NextSearch = 0;
+                    return;
                 }
-                else if (plan.Status == "planned" && plan.DefaultAoa != null && plan.DefaultAoa.Engines != 0 &&
-                    controller.CanUseBoostbackBank(plan.DefaultAoa.Engines, flight, out _) &&
-                    controller.TryBoostbackLimits(plan.DefaultAoa.PrecisionEngines, flight, out double minimum, out _))
-                {
-                    active.Boost = plan.DefaultAoa;
-                    active.TrimMinimum = minimum;
-                    active.TrimMeasurement = nextThrust;
-                    active.UseJointPlan = active.Boost.JointPlan;
-                    active.Glide = plan.GlideApproach;
-                    double actualAlignment = Vector3.Angle(frame.up, (Vector3)BoostbackDirection(active,
-                        (vessel.CoMD - active.Body.position).normalized)) / TurnDegreesPerSecond;
-                    active.BoostDeadline = now + Math.Max(active.Boost.CutoffSeconds, actualAlignment +
-                        controller.BoostbackSpoolSeconds(active.Boost.Engines, flight) +
-                        active.Boost.BurnSeconds * TargetedLandingGuidance.BoostbackImpulseLimit) +
-                        Math.Max(1, cfg.AttitudeResponseSeconds);
-                    active.Leg = TargetedLeg.Boostback;
-                    active.NextSearch = 0;
-                }
-                else if (plan.Status == "no_burn_required")
+                if (plan.Status == "no_burn_required")
                 {
                     active.Leg = TargetedLeg.Recovery;
+                    active.NextBoostbackRetry = float.PositiveInfinity;
                     active.NextSearch = 0;
+                    active.Warning = null;
+                    return;
                 }
-                else
-                    RetryTargetedGlide(active, "No safe Boostback plan within the available fuel and engine limits. Checking glide guidance.");
+                if ((plan.Status != "planned" && plan.Status != "planned_with_trim") || plan.DefaultAoa?.Safe != true ||
+                    plan.DefaultAoa.Engines == 0)
+                {
+                    DeferBoostbackPlan(active, "no_accepted_plan", "No accepted Boostback trajectory yet. Retrying from the next flight state.");
+                    return;
+                }
+                if ((flight.Running | flight.Starting | flight.IssuedStarts) != 0 ||
+                    !controller.CanUseBoostbackBank(plan.DefaultAoa.Engines, flight, out _))
+                {
+                    DeferBoostbackPlan(active, "main_bank_unavailable", "Boostback main engine group did not pass the live check. Retrying.");
+                    return;
+                }
+                if (!controller.TryBoostbackLimits(plan.DefaultAoa.PrecisionEngines, flight, out double minimum, out _))
+                {
+                    DeferBoostbackPlan(active, "precision_bank_unavailable", "Boostback precision engine group did not pass the live check. Retrying.");
+                    return;
+                }
+
+                active.Boost = plan.DefaultAoa;
+                active.TrimMinimum = minimum;
+                active.TrimMeasurement = nextThrust;
+                active.UseJointPlan = active.Boost.JointPlan;
+                active.Glide = plan.GlideApproach;
+                double actualAlignment = Vector3.Angle(frame.up, (Vector3)BoostbackDirection(active,
+                    (vessel.CoMD - active.Body.position).normalized)) / TurnDegreesPerSecond;
+                active.BoostDeadline = now + Math.Max(active.Boost.CutoffSeconds, actualAlignment +
+                    controller.BoostbackSpoolSeconds(active.Boost.Engines, flight) +
+                    active.Boost.BurnSeconds * TargetedLandingGuidance.BoostbackImpulseLimit) +
+                    Math.Max(1, cfg.AttitudeResponseSeconds);
+                active.Leg = TargetedLeg.Boostback;
+                active.NextBoostbackRetry = float.PositiveInfinity;
+                active.NextSearch = 0;
+                active.Warning = null;
                 return;
             }
 
@@ -642,14 +711,12 @@ namespace KspRetroLanding
             if (active.Work != null || realtime < active.NextSearch) return;
             if (cfg.MinimumCoastPitch > cfg.CoastPitchAoaDegrees || cfg.CoastPitchAoaDegrees > cfg.MaximumCoastPitch)
             {
-                if (search != TargetedSearch.Cutoff)
-                    RetryTargetedGlide(active, "Default AoA is outside the configured bounds. Retrying glide guidance.");
+                TargetedSearchUnavailable(active, search, now, "invalid_aoa_range", "Default AoA is outside the configured bounds. Retrying.");
                 return;
             }
             if (active.Body.atmosphere && !farCoast.CanSampleFootprint)
             {
-                if (search != TargetedSearch.Cutoff)
-                    RetryTargetedGlide(active, "FAR aero samples are unavailable. Retrying glide guidance.");
+                TargetedSearchUnavailable(active, search, now, "far_unavailable", "FAR aero samples are unavailable. Retrying.");
                 return;
             }
             if (NeedsGlideBounds(active, search) && active.GlideSamplesDeadline == 0)
@@ -659,8 +726,8 @@ namespace KspRetroLanding
                 out FootprintAtmosphere nominal, out FootprintAtmosphere minimum, out FootprintAtmosphere maximum,
                 out FootprintAtmosphere boostbackAtmosphere))
             {
-                if (realtime >= active.AeroDeadline && search != TargetedSearch.Cutoff)
-                    RetryTargetedGlide(active, "FAR aero samples were not ready in time. Retrying glide guidance.");
+                if (realtime >= active.AeroDeadline)
+                    TargetedSearchUnavailable(active, search, now, "far_sample_timeout", "FAR aero samples were not ready in time. Retrying.");
                 return;
             }
             active.AeroDeadline = 0;
@@ -679,8 +746,7 @@ namespace KspRetroLanding
             double usable = flight.Propellant?.ReachableTons(flight.Restartable) ?? 0;
             if (usable <= 0 || flight.Mass <= 0)
             {
-                if (search != TargetedSearch.Cutoff)
-                    RetryTargetedGlide(active, "No reachable propellant estimate for targeted recovery. Retrying glide guidance.");
+                TargetedSearchUnavailable(active, search, now, "no_reachable_propellant", "No reachable propellant estimate for targeted recovery. Retrying.");
                 return;
             }
 

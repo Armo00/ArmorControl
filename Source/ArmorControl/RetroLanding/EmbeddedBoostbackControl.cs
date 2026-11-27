@@ -14,12 +14,19 @@ namespace KspRetroLanding
             ",boostback_correction_ms,boostback_correction_traces,targeted_last_search_ms,targeted_last_search_traces" +
             ",boostback_first_activate_ut,boostback_activate_angle_deg,boostback_first_thrust_ut" +
             ",boostback_first_body_angle_deg,boostback_first_thrust_angle_deg" +
-            ",boostback_cut_now_aoa_deg,boostback_cut_now_bank_deg";
+            ",boostback_cut_now_aoa_deg,boostback_cut_now_bank_deg" +
+            ",boostback_search_ut,boostback_search_status,boostback_search_rejection,boostback_search_powered_miss_m" +
+            ",boostback_search_main_mask,boostback_search_trim_mask,boostback_search_banks,boostback_search_trials" +
+            ",boostback_search_burn_failures,boostback_search_fuel_failures,boostback_search_landing_failures";
 
         private string BoostbackTrace(double now)
         {
             var active = targeted;
-            if (active?.Boost == null) return new string(',', 33);
+            if (active == null) return new string(',', 44);
+            string planning = BoostbackPlanningTrace(active);
+            if (active.Boost == null)
+                return new string(',', 24) + string.Format(Invariant, ",{0:F3},{1}", active.LastSearchMilliseconds,
+                    active.LastSearchTraces) + new string(',', 7) + planning;
             var correction = active.Correction;
             var cut = correction?.CutNow;
             var repaired = correction?.AfterCorrection;
@@ -38,9 +45,21 @@ namespace KspRetroLanding
                 active.LastSearchMilliseconds, active.LastSearchTraces,
                 Number(active.FirstActivationAt), Number(active.FirstActivationAngle), Number(active.FirstThrustAt),
                 Number(active.FirstBodyAngle), Number(active.FirstThrustAngle),
-                Number(cut?.PitchAoa ?? double.NaN), Number(cut?.GlideBank ?? double.NaN));
+                Number(cut?.PitchAoa ?? double.NaN), Number(cut?.GlideBank ?? double.NaN)) + planning;
 
             string Number(double value) => FootprintAtmosphere.Finite(value) ? value.ToString("F3", Invariant) : "";
+        }
+
+        private static string BoostbackPlanningTrace(TargetedRecovery active)
+        {
+            var plan = active.LastBoostbackPlan;
+            var powered = plan?.DefaultAoa;
+            if (powered == null || powered.Engines == 0) powered = plan?.BestPowered;
+            return string.Format(Invariant, ",{0},{1},{2},{3:F2},{4},{5},{6},{7},{8},{9},{10}",
+                FootprintAtmosphere.Finite(active.LastBoostbackPlanAt) ? active.LastBoostbackPlanAt.ToString("F3", Invariant) : "",
+                plan?.Status, active.LastBoostbackRejection, powered?.MissDistance, powered?.Engines, powered?.PrecisionEngines,
+                plan?.BoostbackBanks, plan?.BoostbackTrials, plan?.BoostbackBurnFailures, plan?.BoostbackFuelFailures,
+                plan?.BoostbackLandingFailures);
         }
 
         private void RecordBoostbackActivation(double now, double alignment)

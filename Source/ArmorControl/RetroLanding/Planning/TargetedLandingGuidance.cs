@@ -44,6 +44,16 @@ namespace LandingPoc
         internal static bool MayStartBoostback(double clearance, double verticalSpeed, Settings settings) =>
             verticalSpeed >= 0 || settings.IgnitionAltitudeBlocked(clearance);
 
+        internal static bool CanRetryBoostback(Flight flight, Phase phase, Settings settings) =>
+            phase == Phase.Coast && !flight.Contact && !flight.SolidBurnActive &&
+            (flight.Running | flight.Starting | flight.IssuedStarts) == 0 &&
+            MayStartBoostback(flight.Height, flight.Vz, settings);
+
+        internal static bool CanStartBoostbackWithTrim(BoostbackApproach powered, BoostbackApproach baseline) =>
+            powered?.Safe == true && powered.Engines != 0 && powered.PrecisionEngines != 0 &&
+            powered.MissDistance <= BoostbackCutoffWindow &&
+            (baseline?.Safe != true || powered.MissDistance < baseline.MissDistance);
+
         internal static bool GlideConflictsWithIgnition(Settings settings, double clearance, double waitSeconds,
             double glideAngle, double alignmentAngle, double turnDegreesPerSecond) =>
             !settings.IgnitionAltitudeBlocked(clearance) && glideAngle > Settings.IgnitionToleranceDegrees &&

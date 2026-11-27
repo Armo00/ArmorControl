@@ -44,9 +44,10 @@ namespace LandingPoc
         internal string Status;
         internal BoostbackApproach GlideApproach;
         internal int Footprints, ScreenedFootprints, VerifiedCandidates;
+        internal int BoostbackBanks, BoostbackTrials, BoostbackBurnFailures, BoostbackFuelFailures, BoostbackLandingFailures;
         internal double FirstFlyableMilliseconds = double.NaN, RunMilliseconds;
         internal BoostbackCorrectionResult Correction;
-        internal BoostbackApproach Baseline, DefaultAoa, MinimumAoa, MaximumAoa;
+        internal BoostbackApproach Baseline, DefaultAoa, MinimumAoa, MaximumAoa, BestPowered;
     }
 
     internal sealed class BoostbackApproach
@@ -81,6 +82,7 @@ namespace LandingPoc
         private readonly AttitudeVector rotation, initialEast, initialNorth;
         private readonly TrajectoryState initial;
         private int footprints;
+        private int poweredTrials, burnFailures, fuelFailures, landingFailures;
         private readonly Dictionary<long, EngineGroup> precisionBanks = new Dictionary<long, EngineGroup>();
 
         internal static BoostbackPreviewResult Plan(BoostbackPreviewInput input, CancellationToken stop, bool includeGlide = true)
@@ -160,7 +162,9 @@ namespace LandingPoc
                 foreach (EngineGroup bank in banks)
                 {
                     stop.ThrowIfCancellationRequested();
+                    output.BoostbackBanks++;
                     BoostbackApproach attempt = Refine(bank, baseline);
+                    if (attempt != null && attempt.Engines != 0 && Better(attempt, output.BestPowered)) output.BestPowered = attempt;
                     if (Better(attempt, best)) best = attempt;
                     if (Reached(best) || footprints >= MaximumFootprints) break;
                 }
@@ -172,8 +176,19 @@ namespace LandingPoc
             if (Reached(best)) output.FirstFlyableMilliseconds = elapsed.Elapsed.TotalMilliseconds;
             if (!includeGlide && input.Settings.OptimizeRecoveryTrajectory && banks.Length != 0)
                 SearchJoint(output, banks, baseline, elapsed);
+            if (!includeGlide && output.Status == "no_solution_in_budget" &&
+                TargetedLandingGuidance.CanStartBoostbackWithTrim(output.BestPowered, baseline))
+            {
+                output.DefaultAoa = output.BestPowered;
+                output.Status = "planned_with_trim";
+                output.FirstFlyableMilliseconds = elapsed.Elapsed.TotalMilliseconds;
+            }
             if (includeGlide) PlanGlide(output, best, retained, preferredAir != null);
             output.Footprints = footprints;
+            output.BoostbackTrials = poweredTrials;
+            output.BoostbackBurnFailures = burnFailures;
+            output.BoostbackFuelFailures = fuelFailures;
+            output.BoostbackLandingFailures = landingFailures;
             output.RunMilliseconds = elapsed.Elapsed.TotalMilliseconds;
             return output;
         }
@@ -419,6 +434,7 @@ namespace LandingPoc
             if (deltaV > 0)
             {
                 if (bank == null) return null;
+                poweredTrials++;
                 trial.Engines = bank.Mask;
                 trial.Heading = (Math.Atan2(east, north) / Degree + 360) % 360;
                 EngineGroup precision = precisionBanks[bank.Mask];
@@ -426,11 +442,17 @@ namespace LandingPoc
                 trial.PrecisionMinimumThrust = Controller.MinimumRunningThrust(precision);
                 AttitudeVector direction = (initialEast * east + initialNorth * north + initial.Position.Unit * vertical) * (1 / deltaV);
                 if (!PropagateBoostback(ref motion, ref flight, trial, bank, precision, direction, atmosphere,
-                    out long used)) return null;
+                    out long used))
+                {
+                    burnFailures++;
+                    return null;
+                }
                 engines = AfterIgnition(engines, used, ref flight.Restartable);
             }
 
-            return FinishTrace(motion, flight, engines, trial, atmosphere, screen);
+            var forecast = FinishTrace(motion, flight, engines, trial, atmosphere, screen);
+            if (deltaV > 0 && forecast?.Safe != true) landingFailures++;
+            return forecast;
         }
 
         private BoostbackApproach FinishTrace(TrajectoryState motion, Flight flight, Engine[] engines,
@@ -558,7 +580,11 @@ namespace LandingPoc
                     double exhaust = (lit.SpecificImpulse > 0 ? lit.SpecificImpulse : input.Settings.SpecificImpulse) * Settings.G0;
                     double burned = flight.Mass * (1 - Math.Exp(-acceleration * dt / exhaust));
                     if (flight.Mass - burned < input.DryMass + input.FuelReserve ||
-                        !flight.Propellant.ConsumeForecast(lit.Mask, burned)) return false;
+                        !flight.Propellant.ConsumeForecast(lit.Mask, burned))
+                    {
+                        fuelFailures++;
+                        return false;
+                    }
                     thrust = axis * acceleration;
                     flight.Mass -= burned;
                     trial.BoostFuel += burned;
