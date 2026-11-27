@@ -106,9 +106,8 @@ namespace LandingPoc
             trial.RecoveryFuel = origin.RecoveryFuel + origin.Touchdown.TouchdownMass - landing.TouchdownMass;
             trial.FuelAtTouchdown = landing.TouchdownMass - input.DryMass;
             trial.Safe = landing.Status == "estimated" && trial.FuelAtTouchdown >= input.FuelReserve;
-            FootprintGeometry.Destination(origin.ForecastLatitude, origin.ForecastLongitude,
-                origin.ForecastNorth * landing.Along + origin.ForecastEast * landing.Cross,
-                origin.ForecastEast * landing.Along - origin.ForecastNorth * landing.Cross, input.Radius, out trial.Lat, out trial.Lon);
+            FootprintDestination(origin.ForecastLatitude, origin.ForecastLongitude,
+                origin.ForecastEast, origin.ForecastNorth, landing, out trial.Lat, out trial.Lon);
             FootprintGeometry.Deviation(input.WaypointLatitude, input.WaypointLongitude, trial.Lat, trial.Lon, input.Radius,
                 out trial.MissDistance, out _, out trial.MissEast, out trial.MissNorth);
             return FootprintAtmosphere.Finite(trial.MissDistance) ? trial : null;

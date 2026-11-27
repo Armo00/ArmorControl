@@ -16,7 +16,7 @@ namespace LandingPoc
             double heldPitch = input.PreferredGlideAoa >= input.MinimumAoa && input.PreferredGlideAoa <= input.MaximumAoa
                 ? input.PreferredGlideAoa : input.DefaultAoa;
             double heldBank = FootprintAtmosphere.Finite(input.PreferredGlideBank) ? input.PreferredGlideBank : 0;
-            var tried = new HashSet<(double, double)>();
+            var tried = new HashSet<KeyValuePair<double, double>>();
             BoostbackApproach held = Probe(heldPitch, heldBank, keep: true);
             output.HeldGlideMiss = held?.Safe == true ? held.MissDistance : double.NaN;
             if (Reached(held))
@@ -92,7 +92,7 @@ namespace LandingPoc
 
             BoostbackApproach Probe(double pitch, double bank, bool keep = false)
             {
-                if (!tried.Add((pitch, AttitudeGuidance.WrapDegrees(bank)))) return null;
+                if (!tried.Add(new KeyValuePair<double, double>(pitch, AttitudeGuidance.WrapDegrees(bank)))) return null;
                 var steering = GlideSteering(pitch, bank);
                 double reserve = Math.Max(input.Settings.AttitudeResponseSeconds, Math.Abs(pitch) / input.GlideRollRate);
                 double acquisition = steering.AcquisitionSeconds + reserve;

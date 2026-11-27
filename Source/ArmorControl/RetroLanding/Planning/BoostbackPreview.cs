@@ -542,9 +542,7 @@ namespace LandingPoc
             trial.ForecastLongitude = lon;
             trial.ForecastEast = alongEast;
             trial.ForecastNorth = alongNorth;
-            FootprintGeometry.Destination(lat, lon,
-                alongNorth * landing.Along + alongEast * landing.Cross,
-                alongEast * landing.Along - alongNorth * landing.Cross, input.Radius, out trial.Lat, out trial.Lon);
+            FootprintDestination(lat, lon, alongEast, alongNorth, landing, out trial.Lat, out trial.Lon);
             FootprintGeometry.Deviation(input.WaypointLatitude, input.WaypointLongitude, trial.Lat, trial.Lon, input.Radius,
                 out trial.MissDistance, out _, out trial.MissEast, out trial.MissNorth);
             if (!FootprintAtmosphere.Finite(trial.MissEast) || !FootprintAtmosphere.Finite(trial.MissNorth)) return null;
@@ -713,8 +711,22 @@ namespace LandingPoc
             if (!atmosphere.Acceleration(altitude, horizontal.Length, vertical, mass, pitched,
                 out double along, out double radial, out double cross, roll)) return false;
             AttitudeVector heading = horizontal.Unit;
-            aero = heading * along + up * radial + up.Cross(heading) * cross;
+            aero = heading * along + up * radial + GeographicSideAxis(heading, up) * cross;
             return true;
+        }
+
+        // FAR measures positive crossrange along up × velocity in KSP's left-handed world.
+        // In the planner's right-handed geographic frame the same direction is along × up.
+        private static AttitudeVector GeographicSideAxis(AttitudeVector along, AttitudeVector up) => along.Cross(up);
+
+        private void FootprintDestination(double latitude, double longitude, double alongEast, double alongNorth,
+            TouchdownEstimate landing, out double resultLatitude, out double resultLongitude)
+        {
+            var along = new AttitudeVector(alongEast, alongNorth, 0);
+            var side = GeographicSideAxis(along, new AttitudeVector(0, 0, 1));
+            var offset = along * landing.Along + side * landing.Cross;
+            FootprintGeometry.Destination(latitude, longitude, offset.Y, offset.X, input.Radius,
+                out resultLatitude, out resultLongitude);
         }
 
         private AttitudeVector Acceleration(AttitudeVector r, AttitudeVector v)
