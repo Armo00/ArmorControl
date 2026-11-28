@@ -22,7 +22,7 @@ namespace KspRetroLanding
             ",targeted_far_budget_denied,targeted_far_voxel_pending,targeted_far_invalid,boostback_landing_forecast" +
             ",targeted_glide_decision,targeted_glide_held_miss_m";
 
-        private string BoostbackTrace(double now)
+        private string BoostbackTrace(double now, Phase phase)
         {
             var active = targeted;
             if (active == null) return new string(',', 55);
@@ -39,7 +39,8 @@ namespace KspRetroLanding
             var repaired = correction?.AfterCorrection;
             return string.Format(Invariant,
                 ",{0},{1:F2},{2:F2},{3:F2},{4:F2},{5},{6},{7},{8},{9},{10},{11},{12},{13},{14},{15},{16:F5},{17:F5},{18:F5},{19:F2},{20:F2},{21:F2},{22},{23},{24:F3},{25},{26},{27},{28},{29},{30},{31},{32}",
-                active.BoostStage, active.Boost.BoostThrustDeltaV, active.DeliveredMagnitude, active.Delivered, active.TrimMinimum,
+                phase == Phase.Boostback ? active.BoostStage.ToString() : "", active.Boost.BoostThrustDeltaV,
+                active.DeliveredMagnitude, active.Delivered, active.TrimMinimum,
                 active.CutoffReason, Number(correction == null ? double.NaN : active.CorrectionAt),
                 Number(correction == null ? double.NaN : now - active.CorrectionAt),
                 Number(cut?.MissEast ?? double.NaN), Number(cut?.MissNorth ?? double.NaN),

@@ -1692,7 +1692,7 @@ namespace KspRetroLanding
                 string.Format(Invariant, ",{0},{1},{2:F4},{3:F4}",
                     retrogradePitch.Authority > 0 ? (retrogradePitch.Authority / AttitudeGuidance.Degree).ToString("F3", Invariant) : "",
                     retrogradeYaw.Authority > 0 ? (retrogradeYaw.Authority / AttitudeGuidance.Degree).ToString("F3", Invariant) : "",
-                    vessel.ctrlState.pitch, vessel.ctrlState.yaw) + FootprintTrace() + BoostbackTrace(now) +
+                    vessel.ctrlState.pitch, vessel.ctrlState.yaw) + FootprintTrace() + BoostbackTrace(now, c.Phase) +
                 string.Format(Invariant, ",{0},{1:F4},{2},{3:F3},{4:F3},{5}", Time.frameCount, Time.unscaledDeltaTime,
                     farCoast.QueryCount, farCoast.QueryMilliseconds, farCoast.TakePeakFrameMilliseconds(),
                     c.Phase == Phase.Coast && targeted?.Leg == TargetedLeg.Recovery && !targeted.StandardFallback

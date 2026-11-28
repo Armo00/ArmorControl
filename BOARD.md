@@ -189,3 +189,9 @@ KSP 原生 Retro Landing 面板同时出现横纵裁切，截图中只露出停�
 2. **滑行观察 10–6 km 及其前后几秒。** 对齐 `targeted_glide_decision`、原姿态复算偏差、动态容差、预测东西和南北偏差、实际 AoA、bank、偏航角速度。重点看 `hold_within_tolerance`、`correct_reduce_side` 和 `correct_reverse_side`，核对保留原姿态、收小侧滑或反向时实际落点趋势。记录何时为安全点火转标准着陆。保留 FAR 调用数和单帧峰值。
 3. **接地保留新文件 `flight-touchdown-*.csv`。** 同一前缀时间戳可和整箭、引擎 CSV 对齐。由第一条 `touchdown` 固定实际落点，后续核对 `settling`、`settling_result`、KSP 接地标志、接地支腿 ID、竖直速度、角速度和倾角。确认陆上站稳时报 `stable`，同时检查触地后 KSP 和 Web 的实际偏差。若碰到落海、倾倒、弹跳或零件脱落，注明现象和时间。
 4. **量取点火造成的落点变化。** 同一份着陆首发指令发出时的飞行状态分别推演不点火和按着陆制导点火，使用同一份气动快照。对比新 CSV 的 `unpowered_along_m`、`powered_along_m`、`actual_along_m`，正数表示实际或预计沿进场方向越过航点。缺气动、无安全方案或计算未完成时，保留对应状态和空值。至少积累两到三趟相同目标的对照，先确认动力着陆预报与实际偏差是否同向。本版未增加固定超前量。
+
+## 2026-11-28 · Codex · 修正 Boostback 子阶段的遥测记录
+
+飞行 CSV 仅在当前阶段为 Boostback 时填写 `boostback_stage`。进入滑行或着陆后清空该列，并保留 `boostback_cutoff_reason` 供事后核对。同步更新了上游导入补丁。
+
+96 组离线用例覆盖了各飞行阶段、Boostback 子阶段和规划状态，同时检查了 CSV 列数与熄火原因。重放导入补丁得到的源码与提交一致。当前 main 的 net461 项目缺少 System.ValueTuple 引用，修改前后常规构建均在 EmbeddedLandingOutcome.cs 报错。验证时从仓库外提供该引用后，完整插件编译通过。
